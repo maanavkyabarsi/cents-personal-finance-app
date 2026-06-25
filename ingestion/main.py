@@ -1,8 +1,7 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 import functions_framework
-import requests
 import json
 import plaid
 from plaid.api import plaid_api
@@ -14,14 +13,14 @@ from plaid.model.transactions_sync_request import TransactionsSyncRequest
 load_dotenv()
 project_id=os.getenv("PROJECT_ID")
 
-sm_client = secretmanager.SecretManagerServiceClient()
 bq_client = bigquery.Client()
 
 def secret_value_puller(secret_name: str):
+    sm_client = secretmanager.SecretManagerServiceClient(transport="rest")
     name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
     response = sm_client.access_secret_version(request={"name": name})
     payload = response.payload.data.decode("UTF-8")
-    return payload
+    return payload.strip()
 
 plaid_client_id = secret_value_puller(secret_name="plaid-client-id")
 plaid_secret = secret_value_puller(secret_name="plaid-secret")
@@ -29,23 +28,23 @@ plaid_secret = secret_value_puller(secret_name="plaid-secret")
 
 def get_plaid_client():
     configuration = plaid.Configuration(
-        host = plaid.Environment.Production,
-        api_key = {
+        host=plaid.Environment.Production,
+        api_key={
             'clientId': plaid_client_id,
             'secret': plaid_secret,
         }
     )
-
     api_client = plaid.ApiClient(configuration)
-    client = plaid_api.PlaidApi(api_client)
-    return client
+    return plaid_api.PlaidApi(api_client)
 
 
 @functions_framework.http
 def handle_webhook(request):
+    print("Webhook received")
     body = request.get_json()
+    print(f"Body: {body}")
     if body['webhook_type'] == "TRANSACTIONS" and body['webhook_code'] == "SYNC_UPDATES_AVAILABLE":
-        # print("Webhook update received")
+        print("Calling transactions_sync")
         transactions = transactions_sync(body['item_id'])
         write_to_bronze(transactions=transactions)
         return ("OK", 200)
@@ -53,42 +52,53 @@ def handle_webhook(request):
         return ("Ignored", 200)
 
 def get_access_token(item_id):
-    plaid_item_map = secret_value_puller(secret_name="plaid-item-map")
-    plaid_item_map = json.loads(plaid_item_map)
+    print(f"Getting access token for item_id: {item_id}")
+    plaid_item_map = json.loads(secret_value_puller(secret_name="plaid-item-map"))
     secret_name = plaid_item_map.get(item_id)
-    access_token = secret_value_puller(secret_name=secret_name)
-    return access_token
+    print(f"Secret name: {secret_name}")
+    return secret_value_puller(secret_name=secret_name)
 
 def transactions_sync(item_id):
     access_token = get_access_token(item_id=item_id)
     client = get_plaid_client()
-    request = TransactionsSyncRequest(
-        access_token=access_token,
-    )
+    request = TransactionsSyncRequest(access_token=access_token)
     response = client.transactions_sync(request)
-    transactions = response['added']
-
-    while (response['has_more']):
+    transactions = list(response.added)
+    while response.has_more:
         request = TransactionsSyncRequest(
-            access_token = access_token,
-            cursor = response['next_cursor']
+            access_token=access_token,
+            cursor=response.next_cursor
         )
         response = client.transactions_sync(request)
-        transactions += response['added']
-    
+        transactions += response.added
+    print(f"Got {len(transactions)} transactions")
     return transactions
 
 def write_to_bronze(transactions):
+    print(f"Writing {len(transactions)} transactions to bronze")
+
     table_id = f"{project_id}.bronze.transactions"
     rows_to_insert = [
         {
             "raw_data": json.dumps(t.to_dict(), default=str),
-            "ingested_at": datetime.utcnow().isoformat()
+            "ingested_at": datetime.now(timezone.utc).isoformat()
         }
         for t in transactions
     ]
+    print(f"Rows to insert: {len(rows_to_insert)}")
     errors = bq_client.insert_rows_json(table_id, rows_to_insert)
     if errors == []:
         print("New rows have been added.")
     else:
         print("Encountered errors while inserting rows: {}".format(errors))
+
+@functions_framework.http
+def test_sync(request):
+    transactions = transactions_sync("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
+    write_to_bronze(transactions=transactions)
+    return (f"Synced {len(transactions)} transactions", 200)
+
+if __name__ == "__main__":
+    transactions = transactions_sync("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
+    write_to_bronze(transactions=transactions)
+    print(f"Synced {len(transactions)} transactions")
