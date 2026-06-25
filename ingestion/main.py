@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 import functions_framework
 import requests
@@ -45,7 +46,11 @@ def handle_webhook(request):
     body = request.get_json()
     if body['webhook_type'] == "TRANSACTIONS" and body['webhook_code'] == "SYNC_UPDATES_AVAILABLE":
         # print("Webhook update received")
-        transactions_sync(body['item_id'])
+        transactions = transactions_sync(body['item_id'])
+        write_to_bronze(transactions=transactions)
+        return ("OK", 200)
+    else:
+        return ("Ignored", 200)
 
 def get_access_token(item_id):
     plaid_item_map = secret_value_puller(secret_name="plaid-item-map")
@@ -74,3 +79,16 @@ def transactions_sync(item_id):
     return transactions
 
 def write_to_bronze(transactions):
+    table_id = f"{project_id}.bronze.transactions"
+    rows_to_insert = [
+        {
+            "raw_data": json.dumps(t.to_dict(), default=str),
+            "ingested_at": datetime.utcnow().isoformat()
+        }
+        for t in transactions
+    ]
+    errors = bq_client.insert_rows_json(table_id, rows_to_insert)
+    if errors == []:
+        print("New rows have been added.")
+    else:
+        print("Encountered errors while inserting rows: {}".format(errors))
