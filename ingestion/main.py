@@ -43,7 +43,8 @@ def get_plaid_client():
 def handle_webhook(request):
     body = request.get_json()
     if body['webhook_type'] == "TRANSACTIONS" and body['webhook_code'] == "SYNC_UPDATES_AVAILABLE":
-        print("Webhook update received")
+        # print("Webhook update received")
+        transactions_sync(body['item_id'])
 
 def get_access_token(item_id):
     plaid_item_map = secret_value_puller(secret_name="plaid-item-map")
