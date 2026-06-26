@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: bronze
+    database: YOUR_GCP_PROJECT_ID
+    schema: bronze
+    tables:
+      - name: transactions

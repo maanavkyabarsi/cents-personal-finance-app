@@ -1,0 +1,16 @@
+name: personal_finance_pipeline
+version: '1.0.0'
+config-version: 2
+
+profile: default
+
+model-paths: ["models"]
+
+models:
+  personal_finance_pipeline:
+    silver:
+      +materialized: table
+      +schema: silver
+    gold:
+      +materialized: table
+      +schema: gold
