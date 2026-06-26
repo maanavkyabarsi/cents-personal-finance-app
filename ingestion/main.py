@@ -40,6 +40,8 @@ def get_plaid_client():
 
 @functions_framework.http
 def handle_webhook(request):
+    if not request.headers.get('Plaid-Verification'):
+        return ('Unauthorized', 401)
     print("Webhook received")
     body = request.get_json()
     print(f"Body: {body}")
