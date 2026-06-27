@@ -22,11 +22,13 @@ def secret_value_puller(secret_name: str):
     payload = response.payload.data.decode("UTF-8")
     return payload
 
-plaid_client_id = secret_value_puller(secret_name="plaid-client-id")
-plaid_secret = secret_value_puller(secret_name="plaid-secret")
-
+def get_credentials():
+    plaid_client_id = secret_value_puller(secret_name="plaid-client-id")
+    plaid_secret = secret_value_puller(secret_name="plaid-secret")
+    return plaid_client_id, plaid_secret
 
 def get_plaid_client():
+    plaid_client_id, plaid_secret = get_credentials()
     configuration = plaid.Configuration(
         host=plaid.Environment.Production,
         api_key={
@@ -49,7 +51,7 @@ def handle_webhook(request):
         print("Calling transactions_sync")
         transactions, cursor = transactions_sync(body['item_id'])
         write_to_bronze(transactions=transactions)
-        save_cursor("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P", cursor)
+        save_cursor(body['item_id'], cursor)
         return ("OK", 200)
     else:
         return ("Ignored", 200)

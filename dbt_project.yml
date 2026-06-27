@@ -2,7 +2,7 @@ name: personal_finance_pipeline
 version: '1.0.0'
 config-version: 2
 
-profile: default
+profile: personal_finance_pipeline
 
 model-paths: ["models"]
 
