@@ -6,3 +6,4 @@ dbt_internal_packages/
 target/
 dbt_packages/
 logs/
+.claude/
