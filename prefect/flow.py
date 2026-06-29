@@ -13,17 +13,6 @@ from main import *
 load_dotenv()
 
 @prefect.task
-def setup_gcp_credentials():
-    secret_block = Secret.load("gcp-sa-key")
-    key_json = secret_block.get()
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-        f.write(key_json)
-        key_path = f.name
-    
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
-
-@prefect.task
 def fetch_item_ids():
     payload = secret_value_puller("plaid-item-map")
     item_ids = list(json.loads(payload).keys())
@@ -51,19 +40,21 @@ def run_dbt():
 
 @prefect.flow
 def daily_sync():
-    setup_gcp_credentials()
-    item_ids = fetch_item_ids()
+    # Load the service account key from the Prefect Secret block. Prefect
+    # auto-parses JSON Secrets, so the value comes back as a dict.
     sa_key = Secret.load("gcp-sa-key").get()
     sa_key_dict = sa_key if isinstance(sa_key, dict) else json.loads(sa_key)
     sa_key_json = json.dumps(sa_key_dict)
 
+    # Write the key to a temp file so all GCP clients (and dbt's oauth
+    # method) pick it up via GOOGLE_APPLICATION_CREDENTIALS.
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
     tmp.write(sa_key_json)
     tmp.close()
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
 
-    # Derive the project id from the service account key so it is never
-    # hardcoded in the repo and stays correct across environments.
+    # Derive the project id from the key so it is never hardcoded in the
+    # repo and stays correct across environments.
     project_id = sa_key_dict["project_id"]
     os.environ["PROJECT_ID"] = project_id
     main.project_id = project_id
