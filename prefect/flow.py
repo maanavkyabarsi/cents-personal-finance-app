@@ -13,6 +13,17 @@ from main import *
 load_dotenv()
 
 @prefect.task
+def setup_gcp_credentials():
+    secret_block = Secret.load("gcp-sa-key")
+    key_json = secret_block.get()
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        f.write(key_json)
+        key_path = f.name
+    
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
+
+@prefect.task
 def fetch_item_ids():
     payload = secret_value_puller("plaid-item-map")
     item_ids = list(json.loads(payload).keys())
@@ -40,6 +51,8 @@ def run_dbt():
 
 @prefect.flow
 def daily_sync():
+    setup_gcp_credentials()
+    item_ids = fetch_item_ids()
     sa_key = Secret.load("gcp-sa-key").get()
     sa_key_dict = sa_key if isinstance(sa_key, dict) else json.loads(sa_key)
     sa_key_json = json.dumps(sa_key_dict)
