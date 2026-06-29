@@ -4,3 +4,4 @@ plaid-python
 functions-framework
 python-dotenv
 prefect
+dbt-bigquery

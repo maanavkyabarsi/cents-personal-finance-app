@@ -39,7 +39,9 @@ deployments:
   work_pool:
     name: my-pool
     work_queue_name: null
-    job_variables: {}
+    job_variables:
+      PROJECT_ID: "airy-cogency-500504-q0"
+      GCP_SA_KEY_JSON: "{{ prefect.secrets.gcp-sa-key }}"
   schedules:
   - cron: 0 */6 * * *
     timezone: null

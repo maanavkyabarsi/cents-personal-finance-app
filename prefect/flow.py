@@ -3,8 +3,8 @@ import subprocess
 import json
 import os
 import sys
+import tempfile
 from dotenv import load_dotenv
-from google.cloud import secretmanager
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'ingestion'))
 from main import *
 
@@ -26,19 +26,26 @@ def sync_and_store(item_id):
 @prefect.task
 def run_dbt():
     dbt_project_dir = os.path.join(os.path.dirname(__file__), "..")
-    dbt_bin = os.path.join(dbt_project_dir, "ingestion", ".venv", "bin", "dbt")
+    profiles_dir = os.path.join(dbt_project_dir, "profiles")
 
     result = subprocess.run(
-        [dbt_bin, "run", "--project-dir", dbt_project_dir, "--profiles-dir", os.path.expanduser("~/.dbt")],
+        ["dbt", "run", "--project-dir", dbt_project_dir, "--profiles-dir", profiles_dir],
         capture_output=True,
         text=True,
     )
     print(result.stdout)
     if result.returncode != 0:
         raise Exception(f"dbt run failed:\n{result.stderr}")
-    
+
 @prefect.flow
 def daily_sync():
+    sa_key_json = os.getenv("GCP_SA_KEY_JSON")
+    if sa_key_json:
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+        tmp.write(sa_key_json)
+        tmp.close()
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+
     item_ids = fetch_item_ids()
     print(f"Fetched {len(item_ids)} accounts")
     for item_id in item_ids:

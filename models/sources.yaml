@@ -2,7 +2,7 @@ version: 2
 
 sources:
   - name: bronze
-    database: YOUR_GCP_PROJECT_ID
+    database: airy-cogency-500504-q0
     schema: bronze
     tables:
       - name: transactions

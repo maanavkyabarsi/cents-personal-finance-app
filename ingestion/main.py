@@ -70,7 +70,7 @@ def transactions_sync(item_id):
         print(f"Cursor: {cursor}")
         request = TransactionsSyncRequest(access_token=access_token, cursor=cursor)
         print("Using saved cursor")
-    except:
+    except Exception:
         request = TransactionsSyncRequest(access_token=access_token)
         print("No saved cursor found, starting fresh")
     response = client.transactions_sync(request)
@@ -127,7 +127,7 @@ def save_cursor(item_id, cursor):
             }
         )
 
-    except:
+    except Exception:
         parent = f"projects/{project_id}"
 
         sm_client.create_secret(
