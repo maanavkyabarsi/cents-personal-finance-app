@@ -19,9 +19,11 @@ push: null
 # this project in remote locations
 pull:
 - prefect.deployments.steps.git_clone:
+    id: clone_step
     repository: https://github.com/maanavkyabarsi/personal-finance-pipeline.git
     branch: main
 - prefect.deployments.steps.pip_install_requirements:
+    directory: "{{ clone_step.directory }}"
     requirements_file: requirements.txt
 
 # the deployments section allows you to provide configuration
