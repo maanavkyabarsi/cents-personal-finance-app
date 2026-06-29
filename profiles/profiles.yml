@@ -3,9 +3,8 @@ personal_finance_pipeline:
   outputs:
     dev:
       type: bigquery
-      method: service-account-json
+      method: oauth
       project: "{{ env_var('PROJECT_ID') }}"
       dataset: silver
       location: US
       threads: 4
-      keyfile_json: "{{ env_var('GCP_SA_KEY_JSON') }}"

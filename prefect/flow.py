@@ -7,10 +7,10 @@ import tempfile
 from dotenv import load_dotenv
 from prefect.blocks.system import Secret
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'ingestion'))
+import main
 from main import *
 
 load_dotenv()
-project_id=os.getenv("PROJECT_ID")
 
 @prefect.task
 def fetch_item_ids():
@@ -41,12 +41,19 @@ def run_dbt():
 @prefect.flow
 def daily_sync():
     sa_key = Secret.load("gcp-sa-key").get()
-    sa_key_json = json.dumps(sa_key) if isinstance(sa_key, dict) else sa_key
+    sa_key_dict = sa_key if isinstance(sa_key, dict) else json.loads(sa_key)
+    sa_key_json = json.dumps(sa_key_dict)
+
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
     tmp.write(sa_key_json)
     tmp.close()
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
-    os.environ["GCP_SA_KEY_JSON"] = sa_key_json
+
+    # Derive the project id from the service account key so it is never
+    # hardcoded in the repo and stays correct across environments.
+    project_id = sa_key_dict["project_id"]
+    os.environ["PROJECT_ID"] = project_id
+    main.project_id = project_id
 
     item_ids = fetch_item_ids()
     print(f"Fetched {len(item_ids)} accounts")

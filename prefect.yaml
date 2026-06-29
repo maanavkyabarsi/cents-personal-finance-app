@@ -39,8 +39,7 @@ deployments:
   work_pool:
     name: my-pool
     work_queue_name: null
-    job_variables:
-      PROJECT_ID: "airy-cogency-500504-q0"
+    job_variables: {}
   schedules:
   - cron: 0 */6 * * *
     timezone: null
