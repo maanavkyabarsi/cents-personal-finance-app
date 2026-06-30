@@ -26,7 +26,7 @@ def sync_and_store(item_id):
 
 @prefect.task
 def run_dbt():
-    dbt_project_dir = os.path.join(os.path.dirname(__file__), "..")
+    dbt_project_dir = os.path.join(os.path.dirname(__file__), "..", "dbt")
     profiles_dir = os.path.join(dbt_project_dir, "profiles")
 
     result = subprocess.run(

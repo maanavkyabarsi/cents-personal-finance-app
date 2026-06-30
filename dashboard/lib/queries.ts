@@ -146,7 +146,7 @@ export async function retrieve_transactions_detailed_category_month(detailed_cat
         throw error;
     }
 }
-// GET /api/transactions/account — transactions filtered by account_id
+
 export async function retrieve_transactions_account(account_id: string) {
     try {
         const query = `
@@ -157,13 +157,13 @@ export async function retrieve_transactions_account(account_id: string) {
                 account_id
             FROM silver.transactions
             WHERE account_id = @account_id
-        `
+        `;
         
         const options = {
             query,
             location: 'US',
             params: { account_id }
-        }
+        };
 
         const [job] = await bigquery.createQueryJob(options)
         console.log(`Job ${job.id} started.`)
@@ -176,4 +176,33 @@ export async function retrieve_transactions_account(account_id: string) {
         console.error('BigQuery error:', error);
         throw error;
     }
+}
+
+// GET /api/spending/month — total spending this month from silver
+export async function retrieve_total_spending_month(month_year: string) {
+    try {
+        const query = `
+            SELECT
+                SUM(amount) as total_amount_spent,
+            FROM silver.transactions
+            WHERE DATE_TRUNC(transaction_date, MONTH) = @month_year
+        `;
+
+        const options = {
+            query,
+            location: 'US',
+            params: { month_year }
+        };
+
+        const [job] = await bigquery.createQueryJob(options)
+        console.log(`Job ${job.id} started.`)
+
+        const [rows] = await job.getQueryResults()
+        return rows
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error: ', error)
+        throw error;
+    } 
 }
