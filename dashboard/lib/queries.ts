@@ -83,5 +83,37 @@ export async function update_budget_limit(primary_category: string, budget_limit
         console.error('BigQuery error:', error);
         throw error;
     }
+}
 
+// GET /api/transactions — transactions filtered by primary_category and month
+export async function retrieve_transactions_primary_category_month(primary_category: string, month_year: string) {
+    try {
+        const query = `
+            SELECT
+                transaction_name,
+                amount,
+                transaction_date,
+                pfc_primary
+            FROM silver.transactions
+            WHERE pfc_primary = @primary_category AND DATE_TRUNC(transaction_date, MONTH) = @month_year
+        `;
+    
+       const options = {
+            query,
+            location: 'US',
+            params: { primary_category, month_year}
+        };
+
+        const [job] = await bigquery.createQueryJob(options);
+        console.log(`Job ${job.id} started.`);
+        
+        const [rows] = await job.getQueryResults();
+        return rows
+
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error:', error);
+        throw error;
+    }
 }
