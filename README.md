@@ -1,4 +1,4 @@
-# Personal Finance Pipeline — Setup Guide
+# Cents: Personal Finance Pipeline — Setup Guide
 
 An end-to-end pipeline that pulls your bank and card transactions from [Plaid](https://plaid.com/) into BigQuery, models them with dbt, and visualizes spending in a Next.js dashboard. Ingestion and transformation run every 6 hours via Prefect.
 
