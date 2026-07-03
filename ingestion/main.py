@@ -49,8 +49,8 @@ def handle_webhook(request):
     print(f"Body: {body}")
     if body['webhook_type'] == "TRANSACTIONS" and body['webhook_code'] == "SYNC_UPDATES_AVAILABLE":
         print("Calling transactions_sync")
-        transactions, cursor = transactions_sync(body['item_id'])
-        write_to_bronze(transactions=transactions)
+        transactions, removed_ids, cursor = transactions_sync(body['item_id'])
+        write_to_bronze(transactions=transactions, removed_ids=removed_ids)
         save_cursor(body['item_id'], cursor)
         try:
             sync_accounts()
@@ -81,31 +81,44 @@ def transactions_sync(item_id):
         print("No saved cursor found, starting fresh")
     response = client.transactions_sync(request)
 
-    transactions = list(response.added)
+    added = list(response.added)
+    modified = list(response.modified)
+    removed_ids = [r.transaction_id for r in response.removed]
     while response.has_more:
         request = TransactionsSyncRequest(
             access_token=access_token,
             cursor=response.next_cursor
         )
         response = client.transactions_sync(request)
-        transactions += response.added
+        added += response.added
+        modified += response.modified
+        removed_ids += [r.transaction_id for r in response.removed]
 
     final_cursor = response.next_cursor
-    print(f"Got {len(transactions)} transactions")
-    return transactions, final_cursor
+    print(f"Got {len(added)} added, {len(modified)} modified, {len(removed_ids)} removed")
+    return added + modified, removed_ids, final_cursor
 
-def write_to_bronze(transactions):
+def write_to_bronze(transactions, removed_ids=None):
     print(f"Writing {len(transactions)} transactions to bronze")
 
     bq_client = bigquery.Client()
     table_id = f"{project_id}.bronze.transactions"
+    now = datetime.now(timezone.utc).isoformat()
     rows_to_insert = [
         {
             "raw_data": json.dumps(t.to_dict(), default=str),
-            "ingested_at": datetime.now(timezone.utc).isoformat()
+            "ingested_at": now
         }
         for t in transactions
     ]
+    if removed_ids:
+        rows_to_insert += [
+            {
+                "raw_data": json.dumps({"transaction_id": tid, "removed": True}),
+                "ingested_at": now
+            }
+            for tid in removed_ids
+        ]
     print(f"Rows to insert: {len(rows_to_insert)}")
     if not rows_to_insert:
         print("No new transactions to write.")
@@ -213,13 +226,13 @@ def save_cursor(item_id, cursor):
 
 @functions_framework.http
 def test_sync(request):
-    transactions, cursor = transactions_sync("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
-    write_to_bronze(transactions=transactions)
-    save_cursor("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
+    transactions, removed_ids, cursor = transactions_sync("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
+    write_to_bronze(transactions=transactions, removed_ids=removed_ids)
+    save_cursor("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P", cursor)
     return (f"Synced {len(transactions)} transactions", 200)
 
 if __name__ == "__main__":
-    transactions, cursor = transactions_sync("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
-    write_to_bronze(transactions=transactions)
+    transactions, removed_ids, cursor = transactions_sync("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
+    write_to_bronze(transactions=transactions, removed_ids=removed_ids)
     save_cursor("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P", cursor)
     print(f"Synced {len(transactions)} transactions")

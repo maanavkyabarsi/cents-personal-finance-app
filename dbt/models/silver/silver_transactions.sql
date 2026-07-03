@@ -17,3 +17,5 @@ SELECT
 JSON_VALUE(raw_data, '$.personal_finance_category.detailed') AS pfc_detailed
 FROM {{ source('bronze', 'transactions') }}
 QUALIFY ROW_NUMBER() OVER (PARTITION BY JSON_VALUE(raw_data, '$.transaction_id') ORDER BY ingested_at DESC) = 1
+    AND JSON_VALUE(raw_data, '$.removed') IS NULL
+    AND JSON_VALUE(raw_data, '$.pending') = 'false'
