@@ -209,7 +209,7 @@ echo -n '{"item_id_for_chase":"plaid-access-token-chase","item_id_for_wells_farg
 ### 5a. Clone the repo and install Python deps
 
 ```bash
-git clone https://github.com/maanavkyabarsi/personal-finance-pipeline.git
+git clone https://github.com/maanavkyabarsi/cents-personal-finance-app
 cd personal-finance-pipeline
 
 cd ingestion

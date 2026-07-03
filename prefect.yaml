@@ -20,7 +20,7 @@ push: null
 pull:
 - prefect.deployments.steps.git_clone:
     id: clone_step
-    repository: https://github.com/maanavkyabarsi/personal-finance-pipeline.git
+    repository: https://github.com/maanavkyabarsi/cents-personal-finance-app
     branch: main
 - prefect.deployments.steps.pip_install_requirements:
     directory: "{{ clone_step.directory }}"
