@@ -20,8 +20,8 @@ def fetch_item_ids():
 
 @prefect.task
 def sync_and_store(item_id):
-    transactions, final_cursor = transactions_sync(item_id)
-    write_to_bronze(transactions=transactions)
+    transactions, removed_ids, final_cursor = transactions_sync(item_id)
+    write_to_bronze(transactions=transactions, removed_ids=removed_ids)
     save_cursor(item_id, final_cursor)
 
 @prefect.task
