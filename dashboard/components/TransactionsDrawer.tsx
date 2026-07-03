@@ -16,7 +16,7 @@ import { Button, EmptyState, Skeleton } from "./primitives";
 
 export interface DrawerTarget {
   category: string;
-  month: string; // YYYY-MM
+  month: string;
   accountId: string | null;
 }
 
@@ -27,9 +27,6 @@ export function TransactionsDrawer({
   target: DrawerTarget | null;
   onClose: () => void;
 }) {
-  // Results are tagged with the request key they belong to. While the current
-  // target doesn't match the loaded key we render the loading state — so the
-  // effect never has to reset state synchronously.
   const [result, setResult] = useState<{ key: string; rows: TransactionRow[] } | null>(
     null
   );
@@ -63,7 +60,6 @@ export function TransactionsDrawer({
   const rows = result && result.key === key ? result.rows : null;
   const error = errorKey === key;
 
-  // Close on Escape (escape-routes rule)
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();

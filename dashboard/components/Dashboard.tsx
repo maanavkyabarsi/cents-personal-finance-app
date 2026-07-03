@@ -81,10 +81,7 @@ export function Dashboard() {
     } catch {}
   }, []);
 
-  // Initial data fetch + persisted theme read — synchronizing with external
-  // systems (network + DOM) on mount, which is what effects are for.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time initial data fetch on mount
     load(false);
     loadOverall();
     loadAccounts();
@@ -95,15 +92,11 @@ export function Dashboard() {
 
   const months = useMemo(() => availableMonths(rows ?? []), [rows]);
 
-  // Effective month is derived (not stored) so it always stays valid as data
-  // loads or changes; `month` only holds an explicit user selection.
   const effectiveMonth = useMemo(() => {
     if (month && months.includes(month)) return month;
     return months.length ? months[months.length - 1] : "";
   }, [month, months]);
 
-  // Rows scoped to the selected account (null = all accounts). Spend/trend/
-  // category views derive from these; months and budget targets stay global.
   const scopedRows = useMemo(() => {
     const base = rows ?? [];
     return accountId ? base.filter((r) => r.account_id === accountId) : base;

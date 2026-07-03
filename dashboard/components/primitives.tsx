@@ -54,7 +54,6 @@ const STATUS_STYLES: Record<BudgetStatus, { dot: string; text: string; bg: strin
     none: { dot: "bg-subtle", text: "text-muted", bg: "bg-surface-2" },
   };
 
-/** Status pill — always pairs color with a text label (color-not-only rule). */
 export function StatusPill({
   status,
   label,
@@ -77,7 +76,6 @@ export function StatusPill({
   );
 }
 
-/** Budget progress bar. Caps the fill at 100% but colors by true status. */
 export function ProgressBar({
   ratio,
   status,

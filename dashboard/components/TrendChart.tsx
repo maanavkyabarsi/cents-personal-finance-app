@@ -157,7 +157,6 @@ export function TrendChart({
                 stroke="var(--primary)"
                 strokeWidth={2}
               />
-              {/* generous invisible hit area for tap/click (touch-target rule) */}
               <circle
                 cx={x(i)}
                 cy={y(p.spent)}

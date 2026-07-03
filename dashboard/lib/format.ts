@@ -1,6 +1,5 @@
 import type { BqDate, BqNumber } from "./types";
 
-/** Normalize a BigQuery numeric (number | string | {value}) to a JS number. */
 export function num(v: BqNumber): number {
   if (v === null || v === undefined) return 0;
   if (typeof v === "number") return v;
@@ -9,7 +8,6 @@ export function num(v: BqNumber): number {
   return 0;
 }
 
-/** Normalize a BigQuery date (string | {value}) to an ISO date string or null. */
 export function dateStr(v: BqDate): string | null {
   if (!v) return null;
   if (typeof v === "string") return v;
@@ -17,7 +15,6 @@ export function dateStr(v: BqDate): string | null {
   return null;
 }
 
-/** "YYYY-MM" key from a BigQuery date. */
 export function monthKey(v: BqDate): string | null {
   const s = dateStr(v);
   return s ? s.slice(0, 7) : null;
@@ -37,12 +34,10 @@ const currencyFmtCents = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
-/** $1,234 — whole dollars, used for headline figures. */
 export function currency(n: number): string {
   return currencyFmt.format(Math.round(n));
 }
 
-/** $1,234.56 — used for individual transactions. */
 export function currencyCents(n: number): string {
   return currencyFmtCents.format(n);
 }
@@ -54,7 +49,6 @@ export function currencyParts(n: number): { main: string; cents: string } {
   return { main: full.slice(0, dot), cents: full.slice(dot) };
 }
 
-/** Compact form for axis labels: $1.2k, $980. */
 export function currencyCompact(n: number): string {
   const abs = Math.abs(n);
   if (abs >= 1000) return `$${(n / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`;
@@ -65,7 +59,6 @@ export function percent(n: number, digits = 0): string {
   return `${(n * 100).toFixed(digits)}%`;
 }
 
-/** "Mar 2025" from a "YYYY-MM" key. */
 export function monthLabel(key: string): string {
   const [y, m] = key.split("-").map(Number);
   if (!y || !m) return key;
@@ -75,7 +68,6 @@ export function monthLabel(key: string): string {
   });
 }
 
-/** "March 2025" — long form for headers. */
 export function monthLabelLong(key: string): string {
   const [y, m] = key.split("-").map(Number);
   if (!y || !m) return key;
@@ -85,7 +77,6 @@ export function monthLabelLong(key: string): string {
   });
 }
 
-/** "Mar 14" from an ISO date string. */
 export function dayLabel(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso + (iso.length === 10 ? "T00:00:00" : ""));
@@ -93,7 +84,6 @@ export function dayLabel(iso: string | null): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-/** RENT_AND_UTILITIES -> "Rent & Utilities" */
 export function prettyCategory(raw: string | null): string {
   if (!raw) return "Uncategorized";
   return raw

@@ -23,7 +23,6 @@ export function Toast({
   }, [toast, onDismiss]);
 
   return (
-    // aria-live so screen readers announce without stealing focus (toast-accessibility rule)
     <div
       className="pointer-events-none fixed inset-x-0 bottom-20 z-[60] flex justify-center px-4 lg:bottom-6"
       aria-live="polite"

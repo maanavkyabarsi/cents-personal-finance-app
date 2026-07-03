@@ -1,12 +1,6 @@
-// Metadata for Plaid Personal Finance Categories (primary level).
-// Each spending category gets a stable, accessible hue and an icon key so the
-// same category looks identical everywhere (icon-style-consistent rule).
-
 export interface CategoryMeta {
-  /** chart/accent color (works on both themes) */
   color: string;
   iconKey: IconKey;
-  /** money flowing IN — excluded from expenditure totals */
   inflow?: boolean;
 }
 
@@ -55,7 +49,6 @@ export function categoryMeta(raw: string | null): CategoryMeta {
   return CATEGORY_META[raw] ?? FALLBACK;
 }
 
-/** True for outflow categories that count as expenditure. */
 export function isSpendingCategory(raw: string | null): boolean {
   return !categoryMeta(raw).inflow;
 }

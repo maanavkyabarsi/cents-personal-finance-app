@@ -47,7 +47,6 @@ function NavItems({
   );
 }
 
-/** Desktop rail (≥1024px) — sidebar for top-level nav (adaptive-navigation rule). */
 export function Sidebar({
   active,
   onSelect,
@@ -67,7 +66,6 @@ export function Sidebar({
   );
 }
 
-/** Mobile bottom bar (<1024px) — max 3 items (bottom-nav-limit rule). */
 export function BottomNav({
   active,
   onSelect,

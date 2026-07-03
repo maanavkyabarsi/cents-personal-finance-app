@@ -35,7 +35,6 @@ export const metadata: Metadata = {
   },
 };
 
-// Set the theme class before paint to avoid a flash of the wrong theme.
 const themeScript = `
 (function () {
   try {

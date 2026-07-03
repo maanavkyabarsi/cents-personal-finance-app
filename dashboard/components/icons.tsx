@@ -1,9 +1,6 @@
 import type { SVGProps } from "react";
 import type { IconKey } from "@/lib/categories";
 
-// A single, consistent line-icon family (1.75 stroke, round caps/joins).
-// SVG only — no emoji used as structural icons (no-emoji-icons rule).
-
 type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
 function base({ size = 20, ...props }: IconProps) {
@@ -183,7 +180,6 @@ export const Crown = (p: IconProps) => (
   </svg>
 );
 
-// ---- category icons ----
 const CategoryGlyphs: Record<IconKey, (p: IconProps) => React.ReactElement> = {
   food: (p) => (
     <svg {...base(p)}>

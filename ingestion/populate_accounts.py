@@ -1,4 +1,3 @@
-"""One-off: refresh gold.accounts from Plaid. Run: python populate_accounts.py"""
 from main import sync_accounts
 
 if __name__ == "__main__":

@@ -2,7 +2,6 @@ import { isSpendingCategory } from "./categories";
 import { monthKey, monthLabel, num } from "./format";
 import type { CategorySummary, MonthPoint, SpendingRow } from "./types";
 
-/** Sorted list of "YYYY-MM" keys present in the data (oldest → newest). */
 export function availableMonths(rows: SpendingRow[]): string[] {
   const set = new Set<string>();
   for (const r of rows) {
@@ -12,7 +11,6 @@ export function availableMonths(rows: SpendingRow[]): string[] {
   return [...set].sort();
 }
 
-/** Total expenditure per month (spending categories only), oldest → newest. */
 export function monthlyTotals(rows: SpendingRow[]): MonthPoint[] {
   const totals = new Map<string, number>();
   for (const r of rows) {
@@ -28,10 +26,6 @@ export function monthlyTotals(rows: SpendingRow[]): MonthPoint[] {
     .map(([key, spent]) => ({ key, label: monthLabel(key), spent }));
 }
 
-/**
- * Roll spending up to primary categories for a single month, attaching the
- * budget limit and per-detailed-category breakdown. Sorted by spend desc.
- */
 export function categorySummaries(
   rows: SpendingRow[],
   month: string
@@ -67,7 +61,6 @@ export function categorySummaries(
   return list.sort((a, b) => b.spent - a.spent);
 }
 
-/** Latest known budget limit per primary category, across all months. */
 export function budgetByCategory(rows: SpendingRow[]): Map<string, number> {
   const out = new Map<string, number>();
   for (const r of rows) {
@@ -78,7 +71,6 @@ export function budgetByCategory(rows: SpendingRow[]): Map<string, number> {
   return out;
 }
 
-/** All spending categories ever seen (for the budgets editor). */
 export function allSpendingCategories(rows: SpendingRow[]): string[] {
   const set = new Set<string>();
   for (const r of rows) {

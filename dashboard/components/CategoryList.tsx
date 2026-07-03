@@ -14,21 +14,18 @@ const STATUS_LABEL = {
   none: "No budget",
 } as const;
 
-/** A single category row: icon, name, proportional bar, budget marker, amount. */
 export function CategoryRow({
   summary,
   max,
   onOpen,
 }: {
   summary: CategorySummary;
-  /** largest spend in the set, for proportional bar widths */
   max: number;
   onOpen: (category: string) => void;
 }) {
   const meta = categoryMeta(summary.category);
   const status = budgetStatus(summary.spent, summary.budget);
   const barPct = Math.min((summary.spent / max) * 100, 100);
-  // Budget marker is positioned on the same scale as the bar.
   const markerPct =
     summary.budget && summary.budget > 0
       ? Math.min((summary.budget / max) * 100, 100)

@@ -288,7 +288,6 @@ export async function retrieve_transactions_account(account_id: string) {
     }
 }
 
-// GET /api/spending/month — total spending this month from silver
 export async function retrieve_total_spending_month(month_year: string) {
     try {
         const query = `
