@@ -62,23 +62,29 @@ export async function gold_spending_by_category() {
     }
 }
 
-export async function set_budget_limit(primary_category: string, budget_limit: number) {
+export async function upsert_budget_limit(primary_category: string, budget_limit: number) {
     try {
         const query = `
-            INSERT INTO gold.budget_limits (primary_category, budget_limit, updated_at)
-            VALUES (@primary_category, @budget_limit, CURRENT_TIMESTAMP())
+            MERGE gold.budget_limits AS target
+            USING (SELECT @primary_category AS primary_category) AS source
+            ON target.primary_category = source.primary_category
+            WHEN MATCHED THEN
+                UPDATE SET budget_limit = @budget_limit, updated_at = CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN
+                INSERT (primary_category, budget_limit, updated_at)
+                VALUES (@primary_category, @budget_limit, CURRENT_TIMESTAMP())
         `;
 
-       const options = {
+        const options = {
             query,
             location: 'US',
-            params: { primary_category, budget_limit}
+            params: { primary_category, budget_limit }
         };
 
         const [job] = await bigquery.createQueryJob(options);
         console.log(`Job ${job.id} started.`);
         await job.getQueryResults();
-        return {success: true}
+        return { success: true }
 
     }
 
@@ -117,32 +123,6 @@ export async function retrieve_overall_budget() {
     }
 }
 
-export async function update_budget_limit(primary_category: string, budget_limit: number) {
-    try {
-        const query = `
-            UPDATE gold.budget_limits
-            SET budget_limit = @budget_limit, updated_at = CURRENT_TIMESTAMP()
-            WHERE primary_category = @primary_category
-        `;
-    
-       const options = {
-            query,
-            location: 'US',
-            params: { primary_category, budget_limit}
-        };
-
-        const [job] = await bigquery.createQueryJob(options);
-        console.log(`Job ${job.id} started.`);
-        await job.getQueryResults();
-        return {success: true}
-
-    }
-
-    catch (error: unknown) {
-        console.error('BigQuery error:', error);
-        throw error;
-    }
-}
 
 export async function retrieve_transactions_primary_category_month(primary_category: string, month_year: string, account_id?: string | null) {
     try {

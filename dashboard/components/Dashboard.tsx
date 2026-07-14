@@ -171,10 +171,10 @@ export function Dashboard() {
   }
 
   const handleSave = useCallback(
-    async (category: string, limit: number, isNew: boolean) => {
+    async (category: string, limit: number, _isNew: boolean) => {
       try {
         const res = await fetch("/api/budget_limits", {
-          method: isNew ? "POST" : "PUT",
+          method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             primary_category: category,
@@ -202,10 +202,10 @@ export function Dashboard() {
   );
 
   const handleSaveOverall = useCallback(
-    async (limit: number, isNew: boolean) => {
+    async (limit: number, _isNew: boolean) => {
       try {
         const res = await fetch("/api/budget/overall", {
-          method: isNew ? "POST" : "PUT",
+          method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ budget_limit: limit }),
         });

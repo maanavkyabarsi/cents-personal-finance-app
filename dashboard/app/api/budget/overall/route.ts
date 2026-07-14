@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import {
     OVERALL_CATEGORY,
     retrieve_overall_budget,
-    set_budget_limit,
-    update_budget_limit,
+    upsert_budget_limit,
 } from "@/lib/queries";
 
 type parseType = {
@@ -18,40 +17,40 @@ export async function GET() {
     }
     catch (error) {
         return NextResponse.json(
-            {error: 'Failed to get overall budget'},
-            {status: 500}
+            { error: 'Failed to get overall budget' },
+            { status: 500 }
         )
     }
 }
 
 export async function POST(request: Request) {
     const payload: parseType = await request.json();
-    const budget_limit = payload.budget_limit
+    const { budget_limit } = payload
 
     try {
-        await set_budget_limit(OVERALL_CATEGORY, budget_limit)
+        await upsert_budget_limit(OVERALL_CATEGORY, budget_limit)
         return NextResponse.json({ message: `Successfully set overall budget as ${budget_limit}` })
     }
     catch (error) {
         return NextResponse.json(
-            {error: 'Failed to set overall budget'},
-            {status: 500}
+            { error: 'Failed to set overall budget' },
+            { status: 500 }
         )
     }
 }
 
 export async function PUT(request: Request) {
     const payload: parseType = await request.json();
-    const budget_limit = payload.budget_limit
+    const { budget_limit } = payload
 
     try {
-        await update_budget_limit(OVERALL_CATEGORY, budget_limit)
+        await upsert_budget_limit(OVERALL_CATEGORY, budget_limit)
         return NextResponse.json({ message: `Successfully updated overall budget as ${budget_limit}` })
     }
     catch (error) {
         return NextResponse.json(
-            {error: 'Failed to update overall budget'},
-            {status: 500}
+            { error: 'Failed to update overall budget' },
+            { status: 500 }
         )
     }
 }
