@@ -295,3 +295,31 @@ export async function retrieve_total_spending_month(month_year: string) {
         throw error;
     } 
 }
+
+export async function retrieve_primary_categories() {
+    try {
+        const query = `
+            SELECT DISTINCT t.pfc_primary AS category, b.budget_limit AS \`limit\`
+            FROM silver.transactions t
+            LEFT JOIN gold.budget_limits b
+                ON t.pfc_primary = b.primary_category
+        `;
+
+        const options = {
+            query,
+            location: 'US',
+        };
+
+        const [job] = await bigquery.createQueryJob(options)
+        console.log(`Job ${job.id} started.`)
+
+        const [rows] = await job.getQueryResults()
+        return rows
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error: ', error)
+        throw error;
+    } 
+
+}
