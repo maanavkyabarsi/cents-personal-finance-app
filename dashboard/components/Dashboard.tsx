@@ -173,7 +173,7 @@ export function Dashboard() {
   const handleSave = useCallback(
     async (category: string, limit: number, _isNew: boolean) => {
       try {
-        const res = await fetch("/api/budget_limits", {
+        const res = await fetch("/api/budget/limits", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
