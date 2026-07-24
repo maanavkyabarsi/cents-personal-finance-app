@@ -323,3 +323,78 @@ export async function retrieve_primary_categories() {
     } 
 
 }
+
+export async function retrieve_spending_trends(grain: string, start_date: string | null) {
+    try {
+        const query = `
+            SELECT
+                DATE_TRUNC(transaction_date, ${grain}) AS period,
+                SUM(amount) AS total
+            FROM silver.transactions
+
+            WHERE transaction_date >= @start_date OR @start_date IS NULL
+            GROUP BY period
+            ORDER BY period
+        `;
+
+        const options = {
+            query,
+            location: 'US',
+            params: { start_date: start_date !== null ? bigquery.date(start_date) : null },
+            types: { start_date: 'DATE' },
+        }
+
+        console.log('DEBUG options:', JSON.stringify(options, null, 2))
+        const [job] = await bigquery.createQueryJob(options)
+        console.log(`Job ${job.id} started.`)
+
+        const [rows] = await job.getQueryResults()
+        const total_spending = rows.reduce((sum, row) => sum + row.total, 0);
+        
+        if (start_date == null) {
+            try {
+                const query = `
+                    SELECT MIN(transaction_date) AS earliest_date
+                    FROM silver.transactions
+                `;
+
+                const options = {
+                    query,
+                    location: 'US',
+                };
+
+                const [job] = await bigquery.createQueryJob(options)
+                console.log(`Job ${job.id} started.`)
+
+                const [rows] = await job.getQueryResults()
+                
+                var [{ earliest_date: arithmetic_start_date }] = rows
+                arithmetic_start_date = new Date(arithmetic_start_date.value)
+
+            }
+
+            catch (error: unknown) {
+                console.error('BigQuery error: ', error)
+                throw error;
+            } 
+
+        }
+        else {
+            arithmetic_start_date = new Date(start_date)
+        }
+        const current_date = new Date()
+
+        const days = (current_date.getTime() - arithmetic_start_date.getTime()) / (1000 * 60 * 60 * 24)
+
+        const avg_daily_spend = total_spending / days
+        
+        return { rows, total_spending, avg_daily_spend }
+
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error: ', error)
+        throw error;
+    } 
+        
+}
