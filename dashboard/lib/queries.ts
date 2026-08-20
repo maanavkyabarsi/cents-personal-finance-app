@@ -344,7 +344,6 @@ export async function retrieve_spending_trends(grain: string, start_date: string
             types: { start_date: 'DATE' },
         }
 
-        console.log('DEBUG options:', JSON.stringify(options, null, 2))
         const [job] = await bigquery.createQueryJob(options)
         console.log(`Job ${job.id} started.`)
 
