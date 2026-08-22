@@ -6,11 +6,12 @@ import {
   currency,
   currencyCents,
   currencyParts,
+  monthLabel,
   monthLabelLong,
   percent,
   prettyCategory,
 } from "@/lib/format";
-import type { CategorySummary, MonthPoint, TransactionRow } from "@/lib/types";
+import type { CategorySummary, DashboardOverview, TransactionRow } from "@/lib/types";
 import { Alert, ChartPie } from "../icons";
 import { Card, EmptyState, cx } from "../primitives";
 import { Donut } from "../Donut";
@@ -20,35 +21,33 @@ import { SpendingTrends } from "../SpendingTrends";
 export function OverviewView({
   month,
   summaries,
-  points,
+  overview,
   recent,
-  overallBudget,
   accountId,
   onOpenCategory,
   onViewAll,
 }: {
   month: string;
   summaries: CategorySummary[];
-  points: MonthPoint[];
+  overview: DashboardOverview | null;
   recent: TransactionRow[] | null;
-  overallBudget: number | null;
   accountId: string | null;
   onOpenCategory: (category: string) => void;
   onViewAll: () => void;
 }) {
-  const totalSpent = summaries.reduce((s, c) => s + c.spent, 0);
-  const hasBudget = overallBudget != null && overallBudget > 0;
-  const budget = hasBudget ? (overallBudget as number) : 0;
-  const remaining = budget - totalSpent;
+  const totalSpent = overview?.totalSpent ?? 0;
+  const hasBudget = overview?.budget != null && overview.budget > 0;
+  const budget = hasBudget ? (overview!.budget as number) : 0;
+  const remaining = overview?.remaining ?? 0;
 
-  const idx = points.findIndex((p) => p.key === month);
-  const prev = idx > 0 ? points[idx - 1].spent : null;
-  const prevLabel = idx > 0 ? points[idx - 1].label : null;
-  const delta = prev && prev > 0 ? ((totalSpent - prev) / prev) * 100 : null;
+  const delta = overview?.momDeltaPct ?? null;
+  const prevLabel = overview?.prevMonthKey ? monthLabel(overview.prevMonthKey) : null;
 
-  const { daysElapsed, daysLeft, inMonth } = monthProgress(month);
-  const pace = daysElapsed > 0 ? totalSpent / daysElapsed : totalSpent;
-  const usedRatio = hasBudget ? totalSpent / budget : 0;
+  const daysElapsed = overview?.daysElapsed ?? 0;
+  const daysLeft = overview?.daysLeft ?? 0;
+  const inMonth = overview?.inMonth ?? false;
+  const pace = overview?.dailyPace ?? 0;
+  const usedRatio = overview?.usedRatio ?? 0;
 
   if (summaries.length === 0) {
     return (
@@ -105,7 +104,7 @@ export function OverviewView({
         </Card>
 
         {(() => {
-          const tone = hasBudget ? budgetTone(usedRatio) : "good";
+          const tone = hasBudget ? STATUS_TONE[overview?.status ?? "none"] : "good";
           const over = hasBudget && usedRatio > 1;
           return (
             <div
@@ -257,12 +256,13 @@ const CREAM = "#F5EEDD";
 
 type BudgetTone = "good" | "warn" | "high" | "over";
 
-function budgetTone(ratio: number): BudgetTone {
-  if (ratio > 1) return "over";
-  if (ratio > 0.9) return "high";
-  if (ratio > 0.65) return "warn";
-  return "good";
-}
+const STATUS_TONE: Record<CategorySummary["status"], BudgetTone> = {
+  under: "good",
+  warning: "warn",
+  high: "high",
+  over: "over",
+  none: "good",
+};
 
 const TONE_BG: Record<BudgetTone, string> = {
   good: "#2C5C3F",
@@ -270,22 +270,6 @@ const TONE_BG: Record<BudgetTone, string> = {
   high: "#C15B3D",
   over: "#B23A2A",
 };
-
-function monthProgress(monthKey: string): {
-  daysElapsed: number;
-  daysLeft: number;
-  inMonth: boolean;
-} {
-  const [y, m] = monthKey.split("-").map(Number);
-  const daysInMonth = y && m ? new Date(y, m, 0).getDate() : 30;
-  const now = new Date();
-  const isCurrent = now.getFullYear() === y && now.getMonth() + 1 === m;
-  if (isCurrent) {
-    const day = now.getDate();
-    return { daysElapsed: day, daysLeft: daysInMonth - day, inMonth: true };
-  }
-  return { daysElapsed: daysInMonth, daysLeft: 0, inMonth: false };
-}
 
 function ringNote(
   hasBudget: boolean,

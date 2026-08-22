@@ -1,3 +1,5 @@
+import type { BudgetStatus } from "./derive";
+
 export type BqDate = string | { value: string } | null;
 export type BqNumber = number | string | { value: string } | null;
 
@@ -24,6 +26,7 @@ export interface CategorySummary {
   category: string;
   spent: number;
   budget: number | null;
+  status: BudgetStatus;
   detailed: { name: string; spent: number }[];
 }
 
@@ -31,6 +34,20 @@ export interface MonthPoint {
   key: string;
   label: string;
   spent: number;
+}
+
+export interface DashboardOverview {
+  totalSpent: number;
+  budget: number | null;
+  remaining: number | null;
+  momDeltaPct: number | null;
+  prevMonthKey: string | null;
+  dailyPace: number;
+  usedRatio: number;
+  status: BudgetStatus;
+  daysElapsed: number;
+  daysLeft: number;
+  inMonth: boolean;
 }
 
 export interface Account {

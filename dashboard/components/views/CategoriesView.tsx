@@ -1,7 +1,6 @@
 "use client";
 
 import { categoryMeta } from "@/lib/categories";
-import { budgetStatus } from "@/lib/derive";
 import {
   currency,
   monthLabelLong,
@@ -20,6 +19,7 @@ import {
 const STATUS_LABEL = {
   under: "On track",
   warning: "Near limit",
+  high: "High",
   over: "Over budget",
   none: "No budget",
 } as const;
@@ -32,7 +32,7 @@ function CategoryCard({
   onOpen: (category: string) => void;
 }) {
   const meta = categoryMeta(summary.category);
-  const status = budgetStatus(summary.spent, summary.budget);
+  const status = summary.status;
   const ratio = summary.budget ? summary.spent / summary.budget : 0;
   const topDetailed = summary.detailed.slice(0, 3);
   const detailMax = Math.max(...summary.detailed.map((d) => d.spent), 1);

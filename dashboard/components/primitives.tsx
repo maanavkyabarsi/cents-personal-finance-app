@@ -50,6 +50,7 @@ const STATUS_STYLES: Record<BudgetStatus, { dot: string; text: string; bg: strin
   {
     under: { dot: "bg-accent", text: "text-accent", bg: "bg-accent-soft" },
     warning: { dot: "bg-warning", text: "text-warning", bg: "bg-warning-soft" },
+    high: { dot: "bg-danger", text: "text-danger", bg: "bg-danger-soft" },
     over: { dot: "bg-danger", text: "text-danger", bg: "bg-danger-soft" },
     none: { dot: "bg-subtle", text: "text-muted", bg: "bg-surface-2" },
   };
@@ -85,7 +86,7 @@ export function ProgressBar({
 }) {
   const pct = Math.min(Math.max(ratio, 0), 1) * 100;
   const fill =
-    status === "over"
+    status === "over" || status === "high"
       ? "bg-danger"
       : status === "warning"
         ? "bg-warning"

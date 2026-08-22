@@ -1,4 +1,6 @@
 import { bigquery, projectId } from '@/lib/bigquery'
+import { isSpendingCategory } from '@/lib/categories'
+import { budgetStatus, monthProgress } from '@/lib/derive'
 
 export const OVERALL_CATEGORY = '__OVERALL__'
 
@@ -314,14 +316,197 @@ export async function retrieve_primary_categories() {
         console.log(`Job ${job.id} started.`)
 
         const [rows] = await job.getQueryResults()
-        return rows
+        return rows.filter((row) => isSpendingCategory(row.category))
     }
 
     catch (error: unknown) {
         console.error('BigQuery error: ', error)
         throw error;
-    } 
+    }
 
+}
+
+export async function retrieve_available_months() {
+    try {
+        const query = `
+            SELECT DISTINCT month
+            FROM gold.spending_by_category
+            ORDER BY month
+        `;
+
+        const options = {
+            query,
+            location: 'US',
+        };
+
+        const [job] = await bigquery.createQueryJob(options)
+        console.log(`Job ${job.id} started.`)
+
+        const [rows] = await job.getQueryResults()
+        const months = new Set<string>();
+        for (const row of rows) {
+            const raw = row.month?.value ?? row.month;
+            if (typeof raw === 'string') months.add(raw.slice(0, 7));
+        }
+        return [...months].sort()
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error: ', error)
+        throw error;
+    }
+}
+
+export async function retrieve_category_summaries(month_year: string, account_id?: string | null) {
+    try {
+        const params: Record<string, string> = { month_year }
+        let accountFilter = ''
+        if (account_id) {
+            params.account_id = account_id
+            accountFilter = 'AND s.account_id = @account_id'
+        }
+
+        const query = `
+            SELECT
+                s.primary_category,
+                s.detailed_category,
+                s.total_spending,
+                b.budget_limit
+            FROM gold.spending_by_category AS s
+            LEFT JOIN gold.budget_limits AS b
+                ON s.primary_category = b.primary_category
+            WHERE DATE_TRUNC(s.month, MONTH) = @month_year
+                ${accountFilter}
+        `;
+
+        const options = {
+            query,
+            location: 'US',
+            params,
+        };
+
+        const [job] = await bigquery.createQueryJob(options)
+        console.log(`Job ${job.id} started.`)
+
+        const [rows] = await job.getQueryResults()
+
+        const map = new Map<string, {
+            category: string;
+            spent: number;
+            budget: number | null;
+            detailed: { name: string; spent: number }[];
+        }>();
+
+        for (const row of rows) {
+            if (!isSpendingCategory(row.primary_category)) continue;
+            const amt = Number(row.total_spending) || 0;
+            if (amt <= 0) continue;
+
+            const cat = row.primary_category ?? 'UNCATEGORIZED';
+            let entry = map.get(cat);
+            if (!entry) {
+                entry = { category: cat, spent: 0, budget: null, detailed: [] };
+                map.set(cat, entry);
+            }
+            entry.spent += amt;
+
+            const limit = Number(row.budget_limit) || 0;
+            if (row.budget_limit !== null && limit > 0) entry.budget = limit;
+
+            if (row.detailed_category) {
+                const existing = entry.detailed.find((d) => d.name === row.detailed_category);
+                if (existing) existing.spent += amt;
+                else entry.detailed.push({ name: row.detailed_category, spent: amt });
+            }
+        }
+
+        const summaries = [...map.values()].map((entry) => ({
+            ...entry,
+            status: budgetStatus(entry.spent, entry.budget),
+        }));
+        for (const s of summaries) s.detailed.sort((a, b) => b.spent - a.spent);
+        return summaries.sort((a, b) => b.spent - a.spent)
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error: ', error)
+        throw error;
+    }
+}
+
+export async function retrieve_dashboard_overview(month_year: string, account_id?: string | null) {
+    try {
+        const [y, m] = month_year.split('-').map(Number)
+        const prevDate = new Date(y, m - 2, 1)
+        const prev_month_year = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}-01`
+        const prevMonthKey = prev_month_year.slice(0, 7)
+
+        const params: Record<string, string> = { month_year, prev_month_year }
+        let accountFilter = ''
+        if (account_id) {
+            params.account_id = account_id
+            accountFilter = 'AND account_id = @account_id'
+        }
+
+        const query = `
+            SELECT primary_category, total_spending, month
+            FROM gold.spending_by_category
+            WHERE DATE_TRUNC(month, MONTH) IN (@month_year, @prev_month_year)
+                ${accountFilter}
+        `;
+
+        const options = {
+            query,
+            location: 'US',
+            params,
+        };
+
+        const [job] = await bigquery.createQueryJob(options)
+        console.log(`Job ${job.id} started.`)
+
+        const [rows] = await job.getQueryResults()
+
+        let totalSpent = 0
+        let prevSpent = 0
+        for (const row of rows) {
+            if (!isSpendingCategory(row.primary_category)) continue;
+            const amt = Number(row.total_spending) || 0;
+            if (amt <= 0) continue;
+            const raw = row.month?.value ?? row.month;
+            const key = typeof raw === 'string' ? raw.slice(0, 7) : null;
+            if (key === month_year.slice(0, 7)) totalSpent += amt;
+            else if (key === prevMonthKey) prevSpent += amt;
+        }
+
+        const overallRows = await retrieve_overall_budget()
+        const budgetLimit = overallRows[0] ? Number(overallRows[0].budget_limit) || 0 : 0
+        const hasBudget = budgetLimit > 0
+
+        const momDeltaPct = prevSpent > 0 ? ((totalSpent - prevSpent) / prevSpent) * 100 : null
+
+        const { daysElapsed, daysLeft, inMonth } = monthProgress(month_year.slice(0, 7))
+        const dailyPace = daysElapsed > 0 ? totalSpent / daysElapsed : totalSpent
+        const usedRatio = hasBudget ? totalSpent / budgetLimit : 0
+
+        return {
+            totalSpent,
+            budget: hasBudget ? budgetLimit : null,
+            remaining: hasBudget ? budgetLimit - totalSpent : null,
+            momDeltaPct,
+            prevMonthKey: prevSpent > 0 ? prevMonthKey : null,
+            dailyPace,
+            usedRatio,
+            status: budgetStatus(totalSpent, hasBudget ? budgetLimit : null),
+            daysElapsed,
+            daysLeft,
+            inMonth,
+        }
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error: ', error)
+        throw error;
+    }
 }
 
 export async function retrieve_spending_trends(grain: string, start_date: string | null, account_id: string | null, primary_category: string | null, detailed_category: string | null) {

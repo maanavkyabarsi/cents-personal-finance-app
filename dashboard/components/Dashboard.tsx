@@ -1,11 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { availableMonths, categorySummaries, monthlyTotals } from "@/lib/derive";
 import { num } from "@/lib/format";
-import type { Account, SpendingRow, TransactionRow, ViewId } from "@/lib/types";
-import { monthKey } from "@/lib/format";
-import { isSpendingCategory } from "@/lib/categories";
+import type {
+  Account,
+  CategorySummary,
+  DashboardOverview,
+  SpendingRow,
+  TransactionRow,
+  ViewId,
+} from "@/lib/types";
 import { BottomNav, Sidebar } from "./Sidebar";
 import { PageHeader, TopStrip, type AccountOption } from "./Topbar";
 import { Toast, type ToastState } from "./Toast";
@@ -41,6 +45,9 @@ export function Dashboard() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [allCategories, setAllCategories] = useState<string[]>([]);
   const [budgets, setBudgets] = useState<Map<string, number>>(new Map());
+  const [months, setMonths] = useState<string[]>([]);
+  const [summaries, setSummaries] = useState<CategorySummary[]>([]);
+  const [overview, setOverview] = useState<DashboardOverview | null>(null);
 
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setRefreshing(true);
@@ -85,7 +92,7 @@ export function Dashboard() {
       const categories = new Set<string>();
       const budgetMap = new Map<string, number>();
       for (const row of Array.isArray(data) ? data : []) {
-        if (!row.category || !isSpendingCategory(row.category)) continue;
+        if (!row.category) continue;
         categories.add(row.category);
         const limit = num(row.limit as never);
         if (row.limit !== null && limit > 0) budgetMap.set(row.category, limit);
@@ -95,27 +102,30 @@ export function Dashboard() {
     } catch {}
   }, []);
 
+  const loadMonths = useCallback(async () => {
+    try {
+      const res = await fetch("/api/months");
+      if (!res.ok) throw new Error();
+      const data: string[] = await res.json();
+      setMonths(Array.isArray(data) ? data : []);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     load(false);
     loadOverall();
     loadAccounts();
     loadCategoryBudgets();
+    loadMonths();
     setTheme(
       document.documentElement.classList.contains("dark") ? "dark" : "light"
     );
-  }, [load, loadOverall, loadAccounts, loadCategoryBudgets]);
-
-  const months = useMemo(() => availableMonths(rows ?? []), [rows]);
+  }, [load, loadOverall, loadAccounts, loadCategoryBudgets, loadMonths]);
 
   const effectiveMonth = useMemo(() => {
     if (month && months.includes(month)) return month;
     return months.length ? months[months.length - 1] : "";
   }, [month, months]);
-
-  const scopedRows = useMemo(() => {
-    const base = rows ?? [];
-    return accountId ? base.filter((r) => r.account_id === accountId) : base;
-  }, [rows, accountId]);
 
   const accountMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -131,23 +141,42 @@ export function Dashboard() {
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [rows, accountMap]);
 
-  const points = useMemo(() => monthlyTotals(scopedRows), [scopedRows]);
-  
-  const summaries = useMemo(
-    () => (effectiveMonth ? categorySummaries(scopedRows, effectiveMonth) : []),
-    [scopedRows, effectiveMonth]
-  );
+  const summaryKey = `${effectiveMonth}__${accountId ?? ""}`;
+
+  useEffect(() => {
+    if (!effectiveMonth) return;
+    let cancelled = false;
+    const params = new URLSearchParams({ month: effectiveMonth });
+    if (accountId) params.set("account_id", accountId);
+
+    fetch(`/api/categories?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((data: CategorySummary[]) => {
+        if (!cancelled) setSummaries(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSummaries([]);
+      });
+
+    fetch(`/api/dashboard/overview?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((data: DashboardOverview) => {
+        if (!cancelled) setOverview(data);
+      })
+      .catch(() => {
+        if (!cancelled) setOverview(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveMonth, accountId, summaryKey]);
+
   const spentByCategory = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of scopedRows) {
-      if (monthKey(r.month) !== effectiveMonth) continue;
-      if (!isSpendingCategory(r.primary_category) || !r.primary_category) continue;
-      const amt = num(r.total_spending);
-      if (amt <= 0) continue;
-      m.set(r.primary_category, (m.get(r.primary_category) ?? 0) + amt);
-    }
+    for (const s of summaries) m.set(s.category, s.spent);
     return m;
-  }, [scopedRows, effectiveMonth]);
+  }, [summaries]);
 
   const recentKey = `${effectiveMonth}__${accountId ?? ""}`;
 
@@ -241,10 +270,7 @@ export function Dashboard() {
     [loadOverall]
   );
 
-  const overallSpent = useMemo(
-    () => [...spentByCategory.values()].reduce((s, v) => s + v, 0),
-    [spentByCategory]
-  );
+  const overallSpent = overview?.totalSpent ?? 0;
 
   const openCategory = useCallback(
     (category: string) =>
@@ -305,9 +331,8 @@ export function Dashboard() {
               <OverviewView
                 month={effectiveMonth}
                 summaries={summaries}
-                points={points}
+                overview={overview}
                 recent={recentRows}
-                overallBudget={overallBudget}
                 accountId={accountId}
                 onOpenCategory={openCategory}
                 onViewAll={() => setView("categories")}

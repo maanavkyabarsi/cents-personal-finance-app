@@ -1,7 +1,6 @@
 "use client";
 
 import { categoryMeta } from "@/lib/categories";
-import { budgetStatus } from "@/lib/derive";
 import { currency, percent, prettyCategory } from "@/lib/format";
 import type { CategorySummary } from "@/lib/types";
 import { CategoryIcon, ChevronRight } from "./icons";
@@ -10,6 +9,7 @@ import { StatusPill } from "./primitives";
 const STATUS_LABEL = {
   under: "On track",
   warning: "Near limit",
+  high: "High",
   over: "Over budget",
   none: "No budget",
 } as const;
@@ -24,7 +24,7 @@ export function CategoryRow({
   onOpen: (category: string) => void;
 }) {
   const meta = categoryMeta(summary.category);
-  const status = budgetStatus(summary.spent, summary.budget);
+  const status = summary.status;
   const barPct = Math.min((summary.spent / max) * 100, 100);
   const markerPct =
     summary.budget && summary.budget > 0
