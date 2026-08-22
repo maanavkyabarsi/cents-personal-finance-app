@@ -117,6 +117,7 @@ export function Dashboard() {
   }, [rows, accountMap]);
 
   const points = useMemo(() => monthlyTotals(scopedRows), [scopedRows]);
+  
   const summaries = useMemo(
     () => (effectiveMonth ? categorySummaries(scopedRows, effectiveMonth) : []),
     [scopedRows, effectiveMonth]

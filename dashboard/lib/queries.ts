@@ -324,15 +324,19 @@ export async function retrieve_primary_categories() {
 
 }
 
-export async function retrieve_spending_trends(grain: string, start_date: string | null, account_id: string | null) {
+export async function retrieve_spending_trends(grain: string, start_date: string | null, account_id: string | null, primary_category: string | null, detailed_category: string | null) {
     try {
         const query = `
             SELECT
                 DATE_TRUNC(transaction_date, ${grain}) AS period,
                 SUM(amount) AS total
             FROM silver.transactions
-
-            WHERE (transaction_date >= @start_date OR @start_date IS NULL) AND (@account_id = account_id OR @account_id IS NULL)
+            WHERE
+                (transaction_date >= @start_date OR @start_date IS NULL)
+                AND (@account_id = account_id OR @account_id IS NULL)
+                AND (@primary_category = pfc_primary OR @primary_category IS NULL)
+                AND (@detailed_category = pfc_detailed OR @detailed_category IS NULL)
+                AND pfc_primary NOT IN ('INCOME', 'TRANSFER_IN')    
             GROUP BY period
             ORDER BY period
         `;
@@ -340,8 +344,8 @@ export async function retrieve_spending_trends(grain: string, start_date: string
         const options = {
             query,
             location: 'US',
-            params: { start_date: start_date !== null ? bigquery.date(start_date) : null , account_id },
-            types: { start_date: 'DATE' , account_id: 'STRING'},
+            params: { start_date: start_date !== null ? bigquery.date(start_date) : null , account_id , primary_category, detailed_category},
+            types: { start_date: 'DATE' , account_id: 'STRING', primary_category: 'STRING', detailed_category: 'STRING'},
         }
 
         const [job] = await bigquery.createQueryJob(options)

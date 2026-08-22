@@ -5,6 +5,8 @@ export async function GET(request: Request) {
     const url = new URL(request.url)
     let view = url.searchParams.get('view')
     let account_id = url.searchParams.get('account_id')
+    let primary_category = url.searchParams.get('primary_category')
+    let detailed_category = url.searchParams.get('detailed_category')
 
     if (view == 'week' || view == 'month' || view == 'ytd' || view == 'year' || view == 'all') {
         let grain: string
@@ -42,14 +44,14 @@ export async function GET(request: Request) {
             }
             
             case 'all': {
-                grain = 'YEAR'
+                grain = 'MONTH'
                 start_date = null
                 break;
             }
         }
 
         try {
-            const rows = await retrieve_spending_trends(grain, start_date, account_id)
+            const rows = await retrieve_spending_trends(grain, start_date, account_id, primary_category, detailed_category)
             return NextResponse.json(rows)
         }
 
