@@ -61,26 +61,6 @@ export function categorySummaries(
   return list.sort((a, b) => b.spent - a.spent);
 }
 
-export function budgetByCategory(rows: SpendingRow[]): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const r of rows) {
-    if (!r.primary_category) continue;
-    const limit = num(r.budget_limit);
-    if (r.budget_limit !== null && limit > 0) out.set(r.primary_category, limit);
-  }
-  return out;
-}
-
-export function allSpendingCategories(rows: SpendingRow[]): string[] {
-  const set = new Set<string>();
-  for (const r of rows) {
-    if (r.primary_category && isSpendingCategory(r.primary_category)) {
-      set.add(r.primary_category);
-    }
-  }
-  return [...set].sort();
-}
-
 export type BudgetStatus = "under" | "warning" | "over" | "none";
 
 export function budgetStatus(spent: number, budget: number | null): BudgetStatus {

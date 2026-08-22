@@ -1,13 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  allSpendingCategories,
-  availableMonths,
-  budgetByCategory,
-  categorySummaries,
-  monthlyTotals,
-} from "@/lib/derive";
+import { availableMonths, categorySummaries, monthlyTotals } from "@/lib/derive";
 import { num } from "@/lib/format";
 import type { Account, SpendingRow, TransactionRow, ViewId } from "@/lib/types";
 import { monthKey } from "@/lib/format";
@@ -45,6 +39,8 @@ export function Dashboard() {
   const [overallBudget, setOverallBudget] = useState<number | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountId, setAccountId] = useState<string | null>(null);
+  const [allCategories, setAllCategories] = useState<string[]>([]);
+  const [budgets, setBudgets] = useState<Map<string, number>>(new Map());
 
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setRefreshing(true);
@@ -81,14 +77,33 @@ export function Dashboard() {
     } catch {}
   }, []);
 
+  const loadCategoryBudgets = useCallback(async () => {
+    try {
+      const res = await fetch("/api/budget/primary_categories");
+      if (!res.ok) throw new Error();
+      const data: { category: string | null; limit: unknown }[] = await res.json();
+      const categories = new Set<string>();
+      const budgetMap = new Map<string, number>();
+      for (const row of Array.isArray(data) ? data : []) {
+        if (!row.category || !isSpendingCategory(row.category)) continue;
+        categories.add(row.category);
+        const limit = num(row.limit as never);
+        if (row.limit !== null && limit > 0) budgetMap.set(row.category, limit);
+      }
+      setAllCategories([...categories].sort());
+      setBudgets(budgetMap);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     load(false);
     loadOverall();
     loadAccounts();
+    loadCategoryBudgets();
     setTheme(
       document.documentElement.classList.contains("dark") ? "dark" : "light"
     );
-  }, [load, loadOverall, loadAccounts]);
+  }, [load, loadOverall, loadAccounts, loadCategoryBudgets]);
 
   const months = useMemo(() => availableMonths(rows ?? []), [rows]);
 
@@ -121,11 +136,6 @@ export function Dashboard() {
   const summaries = useMemo(
     () => (effectiveMonth ? categorySummaries(scopedRows, effectiveMonth) : []),
     [scopedRows, effectiveMonth]
-  );
-  const budgets = useMemo(() => budgetByCategory(rows ?? []), [rows]);
-  const allCategories = useMemo(
-    () => allSpendingCategories(rows ?? []),
-    [rows]
   );
   const spentByCategory = useMemo(() => {
     const m = new Map<string, number>();
@@ -183,7 +193,7 @@ export function Dashboard() {
           }),
         });
         if (!res.ok) throw new Error();
-        await load(false);
+        await loadCategoryBudgets();
         setToast({
           id: Date.now(),
           message: `${prettyLabel(category)} budget saved`,
@@ -199,7 +209,7 @@ export function Dashboard() {
         return false;
       }
     },
-    [load]
+    [loadCategoryBudgets]
   );
 
   const handleSaveOverall = useCallback(
