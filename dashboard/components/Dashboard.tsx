@@ -298,6 +298,7 @@ export function Dashboard() {
                 points={points}
                 recent={recentRows}
                 overallBudget={overallBudget}
+                accountId={accountId}
                 onOpenCategory={openCategory}
                 onViewAll={() => setView("categories")}
               />

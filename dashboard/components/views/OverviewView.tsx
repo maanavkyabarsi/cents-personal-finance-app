@@ -15,7 +15,7 @@ import { Alert, ChartPie } from "../icons";
 import { Card, EmptyState, cx } from "../primitives";
 import { Donut } from "../Donut";
 import { RecentTransactions } from "../RecentTransactions";
-import { Sparkline } from "../Sparkline";
+import { SpendingTrends } from "../SpendingTrends";
 
 export function OverviewView({
   month,
@@ -23,6 +23,7 @@ export function OverviewView({
   points,
   recent,
   overallBudget,
+  accountId,
   onOpenCategory,
   onViewAll,
 }: {
@@ -31,6 +32,7 @@ export function OverviewView({
   points: MonthPoint[];
   recent: TransactionRow[] | null;
   overallBudget: number | null;
+  accountId: string | null;
   onOpenCategory: (category: string) => void;
   onViewAll: () => void;
 }) {
@@ -165,13 +167,7 @@ export function OverviewView({
           <RecentTransactions rows={recent} />
 
           <div className="mt-5">
-            <div className="mb-3 flex items-baseline justify-between">
-              <span className="text-xs text-subtle">Monthly trend</span>
-              <span className="num text-[15px] text-text">
-                {currency(pace)}/day avg
-              </span>
-            </div>
-            <Sparkline points={points} />
+            <SpendingTrends accountId={accountId} />
           </div>
         </Card>
       </div>
