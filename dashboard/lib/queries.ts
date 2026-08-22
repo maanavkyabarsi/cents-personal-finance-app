@@ -324,7 +324,7 @@ export async function retrieve_primary_categories() {
 
 }
 
-export async function retrieve_spending_trends(grain: string, start_date: string | null) {
+export async function retrieve_spending_trends(grain: string, start_date: string | null, account_id: string | null) {
     try {
         const query = `
             SELECT
@@ -332,7 +332,7 @@ export async function retrieve_spending_trends(grain: string, start_date: string
                 SUM(amount) AS total
             FROM silver.transactions
 
-            WHERE transaction_date >= @start_date OR @start_date IS NULL
+            WHERE (transaction_date >= @start_date OR @start_date IS NULL) AND (@account_id = account_id OR @account_id IS NULL)
             GROUP BY period
             ORDER BY period
         `;
@@ -340,8 +340,8 @@ export async function retrieve_spending_trends(grain: string, start_date: string
         const options = {
             query,
             location: 'US',
-            params: { start_date: start_date !== null ? bigquery.date(start_date) : null },
-            types: { start_date: 'DATE' },
+            params: { start_date: start_date !== null ? bigquery.date(start_date) : null , account_id },
+            types: { start_date: 'DATE' , account_id: 'STRING'},
         }
 
         const [job] = await bigquery.createQueryJob(options)

@@ -4,6 +4,7 @@ import { retrieve_spending_trends } from "@/lib/queries";
 export async function GET(request: Request) {
     const url = new URL(request.url)
     let view = url.searchParams.get('view')
+    let account_id = url.searchParams.get('account_id')
 
     if (view == 'week' || view == 'month' || view == 'ytd' || view == 'year' || view == 'all') {
         let grain: string
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
         }
 
         try {
-            const rows = await retrieve_spending_trends(grain, start_date)
+            const rows = await retrieve_spending_trends(grain, start_date, account_id)
             return NextResponse.json(rows)
         }
 
