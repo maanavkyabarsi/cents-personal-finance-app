@@ -57,6 +57,7 @@ def daily_sync():
     print(f"Fetched {len(item_ids)} accounts")
     for item_id in item_ids:
         sync_and_store(item_id)
+    sync_accounts()
     run_dbt()
 
 if __name__ == "__main__":

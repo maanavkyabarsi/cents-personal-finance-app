@@ -9,6 +9,7 @@ from plaid.api import plaid_api
 from plaid import ApiClient, Configuration
 from google.cloud import bigquery
 from google.cloud import secretmanager
+from google.cloud import firestore
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 
@@ -21,6 +22,20 @@ def secret_value_puller(secret_name: str):
     response = sm_client.access_secret_version(request={"name": name})
     payload = response.payload.data.decode("UTF-8")
     return payload
+
+def get_cursor(item_id):
+    db = firestore.Client()
+    doc = db.collection("plaid_cursors").document(item_id).get()
+    if not doc.exists:
+        return None
+    return doc.to_dict().get("cursor")
+
+def save_cursor(item_id, cursor):
+    db = firestore.Client()
+    db.collection("plaid_cursors").document(item_id).set({
+        "cursor": cursor,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
 
 def get_credentials():
     plaid_client_id = secret_value_puller(secret_name="plaid-client-id")
@@ -52,10 +67,6 @@ def handle_webhook(request):
         transactions, removed_ids, cursor = transactions_sync(body['item_id'])
         write_to_bronze(transactions=transactions, removed_ids=removed_ids)
         save_cursor(body['item_id'], cursor)
-        try:
-            sync_accounts()
-        except Exception as e:
-            print(f"Account sync failed (non-fatal): {e}")
         return ("OK", 200)
     else:
         return ("Ignored", 200)
@@ -71,12 +82,12 @@ def transactions_sync(item_id):
     access_token = get_access_token(item_id=item_id)
     client = get_plaid_client()
 
-    try:
-        cursor = secret_value_puller(secret_name=f"plaid-cursor-{item_id}")
+    cursor = get_cursor(item_id)
+    if cursor:
         print(f"Cursor: {cursor}")
         request = TransactionsSyncRequest(access_token=access_token, cursor=cursor)
         print("Using saved cursor")
-    except Exception:
+    else:
         request = TransactionsSyncRequest(access_token=access_token)
         print("No saved cursor found, starting fresh")
     response = client.transactions_sync(request)
@@ -186,43 +197,6 @@ def sync_accounts():
     )
     job.result()
     return rows
-
-def save_cursor(item_id, cursor):
-    secret_name = f"plaid-cursor-{item_id}"
-    sm_client = secretmanager.SecretManagerServiceClient()
-    
-    try:
-        existing_cursor = secret_value_puller(secret_name=secret_name)
-
-        parent = sm_client.secret_path(project_id, secret_name)
-        sm_client.add_secret_version(
-            request={
-                'parent': parent,
-                'payload': {
-                    'data': cursor.encode('UTF-8')
-                }
-            }
-        )
-
-    except Exception:
-        parent = f"projects/{project_id}"
-
-        sm_client.create_secret(
-            request= {
-                'parent': parent,
-                'secret_id': secret_name,
-                'secret': {"replication": {"automatic": {}}}
-            }
-        )
-        parent = sm_client.secret_path(project_id, secret_name)
-        sm_client.add_secret_version(
-            request={
-                'parent': parent,
-                'payload': {
-                    'data': cursor.encode('UTF-8')
-                }
-            }
-        )
 
 @functions_framework.http
 def test_sync(request):
