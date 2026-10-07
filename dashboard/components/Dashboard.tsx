@@ -20,6 +20,7 @@ import { OverviewView } from "./views/OverviewView";
 import { CategoriesView } from "./views/CategoriesView";
 import { BudgetsView } from "./views/BudgetsView";
 import { authFetch } from "@/lib/authFetch";
+import { useTheme } from "@/lib/useTheme";
 
 const VIEW_META: Record<ViewId, { title: string }> = {
   overview: { title: "Overview" },
@@ -34,7 +35,7 @@ export function Dashboard() {
 
   const [view, setView] = useState<ViewId>("overview");
   const [month, setMonth] = useState<string>("");
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [theme, setThemeMode] = useTheme();
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [recent, setRecent] = useState<{
@@ -118,9 +119,6 @@ export function Dashboard() {
     loadAccounts();
     loadCategoryBudgets();
     loadMonths();
-    setTheme(
-      document.documentElement.classList.contains("dark") ? "dark" : "light"
-    );
   }, [load, loadOverall, loadAccounts, loadCategoryBudgets, loadMonths]);
 
   const effectiveMonth = useMemo(() => {
@@ -202,14 +200,6 @@ export function Dashboard() {
   }, [effectiveMonth, accountId, recentKey]);
 
   const recentRows = recent && recent.key === recentKey ? recent.rows : null;
-
-  function setThemeMode(next: "light" | "dark") {
-    setTheme(next);
-    document.documentElement.classList.toggle("dark", next === "dark");
-    try {
-      localStorage.setItem("fp-theme", next);
-    } catch {}
-  }
 
   const handleSave = useCallback(
     async (category: string, limit: number, _isNew: boolean) => {
