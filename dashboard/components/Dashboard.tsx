@@ -19,6 +19,7 @@ import { Button, Card, EmptyState, Skeleton } from "./primitives";
 import { OverviewView } from "./views/OverviewView";
 import { CategoriesView } from "./views/CategoriesView";
 import { BudgetsView } from "./views/BudgetsView";
+import { authFetch } from "@/lib/authFetch";
 
 const VIEW_META: Record<ViewId, { title: string }> = {
   overview: { title: "Overview" },
@@ -52,7 +53,7 @@ export function Dashboard() {
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setRefreshing(true);
     try {
-      const res = await fetch("/api/spending");
+      const res = await authFetch("/api/spending");
       if (!res.ok) throw new Error();
       const data: SpendingRow[] = await res.json();
       setRows(Array.isArray(data) ? data : []);
@@ -67,7 +68,7 @@ export function Dashboard() {
 
   const loadOverall = useCallback(async () => {
     try {
-      const res = await fetch("/api/budget/overall");
+      const res = await authFetch("/api/budget/overall");
       if (!res.ok) throw new Error();
       const data: { budget_limit: unknown } = await res.json();
       const limit = num(data.budget_limit as never);
@@ -77,7 +78,7 @@ export function Dashboard() {
 
   const loadAccounts = useCallback(async () => {
     try {
-      const res = await fetch("/api/accounts");
+      const res = await authFetch("/api/accounts");
       if (!res.ok) throw new Error();
       const data: Account[] = await res.json();
       setAccounts(Array.isArray(data) ? data : []);
@@ -86,7 +87,7 @@ export function Dashboard() {
 
   const loadCategoryBudgets = useCallback(async () => {
     try {
-      const res = await fetch("/api/budget/primary_categories");
+      const res = await authFetch("/api/budget/primary_categories");
       if (!res.ok) throw new Error();
       const data: { category: string | null; limit: unknown }[] = await res.json();
       const categories = new Set<string>();
@@ -104,7 +105,7 @@ export function Dashboard() {
 
   const loadMonths = useCallback(async () => {
     try {
-      const res = await fetch("/api/months");
+      const res = await authFetch("/api/months");
       if (!res.ok) throw new Error();
       const data: string[] = await res.json();
       setMonths(Array.isArray(data) ? data : []);
@@ -149,7 +150,7 @@ export function Dashboard() {
     const params = new URLSearchParams({ month: effectiveMonth });
     if (accountId) params.set("account_id", accountId);
 
-    fetch(`/api/categories?${params.toString()}`)
+    authFetch(`/api/categories?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: CategorySummary[]) => {
         if (!cancelled) setSummaries(Array.isArray(data) ? data : []);
@@ -158,7 +159,7 @@ export function Dashboard() {
         if (!cancelled) setSummaries([]);
       });
 
-    fetch(`/api/dashboard/overview?${params.toString()}`)
+    authFetch(`/api/dashboard/overview?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: DashboardOverview) => {
         if (!cancelled) setOverview(data);
@@ -186,7 +187,7 @@ export function Dashboard() {
     const url = `/api/transactions/recent?month_year=${effectiveMonth}${
       accountId ? `&account_id=${encodeURIComponent(accountId)}` : ""
     }`;
-    fetch(url)
+    authFetch(url)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: TransactionRow[]) => {
         if (!cancelled)
@@ -213,7 +214,7 @@ export function Dashboard() {
   const handleSave = useCallback(
     async (category: string, limit: number, _isNew: boolean) => {
       try {
-        const res = await fetch("/api/budget/limits", {
+        const res = await authFetch("/api/budget/limits", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -244,7 +245,7 @@ export function Dashboard() {
   const handleSaveOverall = useCallback(
     async (limit: number, _isNew: boolean) => {
       try {
-        const res = await fetch("/api/budget/overall", {
+        const res = await authFetch("/api/budget/overall", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ budget_limit: limit }),

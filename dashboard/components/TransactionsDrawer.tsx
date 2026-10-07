@@ -13,6 +13,7 @@ import {
 import type { TransactionRow } from "@/lib/types";
 import { CategoryIcon, Close, Inbox, Alert } from "./icons";
 import { Button, EmptyState, Skeleton } from "./primitives";
+import { authFetch } from "@/lib/authFetch";
 
 export interface DrawerTarget {
   category: string;
@@ -46,7 +47,7 @@ export function TransactionsDrawer({
         ? `&account_id=${encodeURIComponent(target.accountId)}`
         : ""
     }`;
-    fetch(url)
+    authFetch(url)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: TransactionRow[]) => {
         if (!cancelled) setResult({ key, rows: Array.isArray(data) ? data : [] });

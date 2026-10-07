@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { currency, dayLabel, monthLabel } from "@/lib/format";
 import { cx } from "./primitives";
+import { authFetch } from "@/lib/authFetch";
 
 export type TrendView = "week" | "month" | "ytd" | "year" | "all";
 
@@ -76,7 +77,7 @@ export function SpendingTrends({ accountId }: { accountId: string | null }) {
     let cancelled = false;
     const params = new URLSearchParams({ view });
     if (accountId) params.set("account_id", accountId);
-    fetch(`/api/trend?${params.toString()}`)
+    authFetch(`/api/trend?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((json: TrendResponse) => {
         if (!cancelled) setResult({ key: requestKey, data: json });
