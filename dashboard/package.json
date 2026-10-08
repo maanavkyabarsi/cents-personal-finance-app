@@ -8,6 +8,11 @@
     "start": "next start",
     "lint": "eslint"
   },
+  "overrides": {
+    "jwks-rsa": {
+      "jose": "^5.10.0"
+    }
+  },
   "engines": {
     "node": ">=22.12"
   },
