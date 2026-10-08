@@ -7,3 +7,11 @@ target/
 dbt_packages/
 logs/
 .claude/
+.DS_Store
+**/.DS_Store
+dbt/profiles/.user.yml
+
+# keep dashboard manifests tracked despite *.json
+!dashboard/package.json
+!dashboard/package-lock.json
+!dashboard/tsconfig.json
