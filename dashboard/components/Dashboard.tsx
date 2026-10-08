@@ -21,6 +21,8 @@ import { CategoriesView } from "./views/CategoriesView";
 import { BudgetsView } from "./views/BudgetsView";
 import { authFetch } from "@/lib/authFetch";
 import { useTheme } from "@/lib/useTheme";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 
 const VIEW_META: Record<ViewId, { title: string }> = {
   overview: { title: "Overview" },
@@ -114,11 +116,15 @@ export function Dashboard() {
   }, []);
 
   useEffect(() => {
+    // Fetch-on-mount: every setState in these loaders runs after an await, but
+    // the lint rule doesn't track await boundaries and flags the first call.
+    /* eslint-disable react-hooks/set-state-in-effect */
     load(false);
     loadOverall();
     loadAccounts();
     loadCategoryBudgets();
     loadMonths();
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [load, loadOverall, loadAccounts, loadCategoryBudgets, loadMonths]);
 
   const effectiveMonth = useMemo(() => {
@@ -275,7 +281,11 @@ export function Dashboard() {
 
   return (
     <div className="flex min-h-dvh flex-col bg-bg">
-      <TopStrip theme={theme} onSetTheme={setThemeMode} />
+      <TopStrip
+        theme={theme}
+        onSetTheme={setThemeMode}
+        onSignOut={() => signOut(auth)}
+      />
 
       <div className="flex min-w-0 flex-1">
         <Sidebar active={view} onSelect={setView} />

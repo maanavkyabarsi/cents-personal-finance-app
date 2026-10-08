@@ -71,6 +71,12 @@ export const Refresh = (p: IconProps) => (
     <path d="M21 12a9 9 0 1 1-2.64-6.36M21 4v4h-4" />
   </svg>
 );
+export const LogOut = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3" />
+    <path d="m16 8 4 4-4 4M20 12H9" />
+  </svg>
+);
 export const Close = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M6 6l12 12M18 6 6 18" />

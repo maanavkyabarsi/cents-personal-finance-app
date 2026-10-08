@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { monthLabel } from "@/lib/format";
-import { Check, ChevronDown, Refresh, RingMark } from "./icons";
+import { Check, ChevronDown, LogOut, Refresh, RingMark } from "./icons";
 import { cx } from "./primitives";
 
 export interface AccountOption {
@@ -107,9 +107,11 @@ function AccountRow({
 export function TopStrip({
   theme,
   onSetTheme,
+  onSignOut,
 }: {
   theme: "light" | "dark";
   onSetTheme: (t: "light" | "dark") => void;
+  onSignOut?: () => void;
 }) {
   return (
     <div className="sticky top-0 z-30 flex h-[var(--topbar-total)] items-center justify-between border-b border-border bg-bg/90 pt-[var(--safe-t)] pl-[max(1.25rem,var(--safe-l))] pr-[max(1.25rem,var(--safe-r))] backdrop-blur max-lg:short:static lg:px-10">
@@ -120,6 +122,7 @@ export function TopStrip({
         </span>
       </div>
 
+      <div className="flex items-center gap-2">
       <div className="flex rounded-full border border-border p-0.5">
         {(["light", "dark"] as const).map((mode) => (
           <button
@@ -136,6 +139,16 @@ export function TopStrip({
             {mode}
           </button>
         ))}
+      </div>
+      {onSignOut && (
+        <button
+          onClick={onSignOut}
+          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-full border border-border px-3 text-xs font-medium text-muted transition-colors hover:bg-surface-hover hover:text-text"
+        >
+          <LogOut size={14} />
+          Log out
+        </button>
+      )}
       </div>
     </div>
   );

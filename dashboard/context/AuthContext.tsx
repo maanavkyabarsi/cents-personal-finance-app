@@ -48,9 +48,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     }, [user])
 
-    // Ask the server whether this account is on the allowlist. Only an explicit
-    // 403 from proxy.ts means unauthorized; other failures fall through so the
-    // dashboard's own error state can surface them.
+    // Ask the server whether this account is on the allowlist. Fails closed:
+    // only a 200 from proxy.ts counts as authorized, so a 500 or network error
+    // never lets an unverified account into the dashboard.
     useEffect(() => {
         if (!user) return
 
@@ -59,11 +59,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         authFetch('/api/me')
             .then((res) => {
-                if (!cancelled) setAccess({ uid, authorized: res.status !== 403 })
+                if (!cancelled) setAccess({ uid, authorized: res.ok })
             })
             .catch((error) => {
                 console.error('authorization check failed:', error)
-                if (!cancelled) setAccess({ uid, authorized: true })
+                if (!cancelled) setAccess({ uid, authorized: false })
             })
 
         return () => {
