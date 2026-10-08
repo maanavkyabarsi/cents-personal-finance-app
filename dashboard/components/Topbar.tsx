@@ -37,7 +37,7 @@ function AccountSelect({
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="flex h-9 max-w-[200px] cursor-pointer items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-text"
+        className="flex h-9 max-w-[min(200px,50vw)] cursor-pointer items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-text"
       >
         <span className="truncate">{current}</span>
         <ChevronDown size={14} className="shrink-0 text-subtle" />
@@ -50,7 +50,7 @@ function AccountSelect({
             aria-hidden
           />
           <div
-            className="absolute right-0 z-40 mt-1.5 min-w-[224px] rounded-xl border border-border bg-surface p-1 shadow-[var(--shadow-lg)]"
+            className="absolute right-0 z-40 mt-1.5 min-w-[224px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-surface p-1 shadow-[var(--shadow-lg)]"
             role="listbox"
           >
             <AccountRow
@@ -112,7 +112,7 @@ export function TopStrip({
   onSetTheme: (t: "light" | "dark") => void;
 }) {
   return (
-    <div className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-bg/90 px-5 py-4 backdrop-blur lg:px-10">
+    <div className="sticky top-0 z-30 flex h-[var(--topbar-total)] items-center justify-between border-b border-border bg-bg/90 pt-[var(--safe-t)] pl-[max(1.25rem,var(--safe-l))] pr-[max(1.25rem,var(--safe-r))] backdrop-blur max-lg:short:static lg:px-10">
       <div className="flex items-center gap-2 text-primary">
         <RingMark size={22} />
         <span className="font-serif text-[19px] font-medium tracking-[-0.01em]">
@@ -194,7 +194,7 @@ export function PageHeader({
   refreshing: boolean;
 }) {
   return (
-    <div className="mb-6 flex items-center justify-between gap-3">
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
       <div className="flex min-w-0 flex-col">
         <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-subtle">
           {title}
@@ -206,7 +206,7 @@ export function PageHeader({
         )}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         {accountOptions.length > 0 && (
           <AccountSelect
             options={accountOptions}

@@ -53,7 +53,7 @@ const PAD = { top: 14, right: 12, bottom: 24, left: 12 };
 
 function useWidth() {
   const ref = useRef<HTMLDivElement>(null);
-  const [w, setW] = useState(600);
+  const [w, setW] = useState(0);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -120,7 +120,9 @@ export function SpendingTrends({ accountId }: { accountId: string | null }) {
       ? `${linePath} L${x(points.length - 1)},${PAD.top + innerH} L${x(0)},${PAD.top + innerH} Z`
       : "";
 
-  const labelEvery = Math.max(Math.ceil(points.length / 6), 1);
+  // Cap labels by available width so short-month/day labels never collide.
+  const maxLabels = Math.max(Math.min(6, Math.floor(innerW / 56)), 1);
+  const labelEvery = Math.max(Math.ceil(points.length / maxLabels), 1);
 
   function handleMove(e: React.MouseEvent<SVGSVGElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -141,7 +143,7 @@ export function SpendingTrends({ accountId }: { accountId: string | null }) {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-2 gap-y-2">
         <span className="text-xs text-subtle">Spending trend</span>
         <div className="flex gap-0.5 rounded-full bg-surface-2 p-0.5">
           {VIEWS.map((v) => (
@@ -174,7 +176,7 @@ export function SpendingTrends({ accountId }: { accountId: string | null }) {
       )}
 
       <div ref={ref} className={cx("w-full", loading && "opacity-60")}>
-        {points.length === 0 ? (
+        {points.length === 0 || w === 0 ? (
           <div
             style={{ height: H }}
             className="flex items-center justify-center text-xs text-subtle"
@@ -187,7 +189,7 @@ export function SpendingTrends({ accountId }: { accountId: string | null }) {
             height={H}
             role="img"
             aria-label="Spending trend chart"
-            className="overflow-visible"
+            className="block max-w-full overflow-visible"
             onMouseMove={handleMove}
             onMouseLeave={() => setHover(null)}
           >

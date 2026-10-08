@@ -93,7 +93,7 @@ function BudgetRow({
             onKeyDown={(e) => e.key === "Enter" && save()}
             aria-invalid={value.trim() !== "" && !valid}
             className={cx(
-              "tnum h-10 w-32 rounded-xl border bg-surface pl-7 pr-3 text-sm font-medium text-text transition-colors focus-visible:border-primary",
+              "tnum h-10 w-32 rounded-xl border bg-surface pl-7 pr-3 text-base font-medium text-text transition-colors focus-visible:border-primary sm:text-sm",
               value.trim() !== "" && !valid ? "border-danger" : "border-border"
             )}
           />
@@ -191,7 +191,7 @@ function OverallBudgetCard({
               onKeyDown={(e) => e.key === "Enter" && save()}
               aria-invalid={value.trim() !== "" && !valid}
               className={cx(
-                "tnum h-10 w-36 rounded-xl border bg-surface pl-7 pr-3 text-sm font-medium text-text transition-colors focus-visible:border-primary",
+                "tnum h-10 w-36 rounded-xl border bg-surface pl-7 pr-3 text-base font-medium text-text transition-colors focus-visible:border-primary sm:text-sm",
                 value.trim() !== "" && !valid ? "border-danger" : "border-border"
               )}
             />

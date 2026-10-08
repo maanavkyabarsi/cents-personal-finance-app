@@ -67,8 +67,8 @@ export function OverviewView({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-[1.3fr_1fr]">
-        <Card className="p-6">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+        <Card className="p-4 sm:p-6">
           <p className="text-xs text-subtle">Spent this month</p>
           <p className="mt-1.5 leading-none">
             <span className="num text-[40px] font-medium tracking-[-0.01em] text-text">
@@ -90,7 +90,7 @@ export function OverviewView({
             )}
           </p>
 
-          <div className="mt-4 flex items-center gap-7">
+          <div className="mt-4 flex flex-wrap items-center gap-x-7 gap-y-3">
             <MiniStat
               label="Budget"
               value={hasBudget ? currencyCents(budget) : "—"}
@@ -109,7 +109,7 @@ export function OverviewView({
           return (
             <div
               className={cx(
-                "flex items-center gap-5 rounded-2xl p-6 transition-colors duration-500",
+                "flex items-center gap-5 rounded-2xl p-4 transition-colors duration-500 sm:p-6",
                 over ? "budget-over-glow" : "shadow-[var(--shadow-sm)]"
               )}
               style={{ background: TONE_BG[tone], color: CREAM }}
@@ -139,8 +139,8 @@ export function OverviewView({
         })()}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.35fr_1fr]">
-        <Card className="p-6">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        <Card className="p-4 sm:p-6">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-[13.5px] font-semibold text-text">
               Spending by category
@@ -159,7 +159,7 @@ export function OverviewView({
           />
         </Card>
 
-        <Card className="p-6">
+        <Card className="p-4 sm:p-6">
           <h3 className="mb-4 text-[13.5px] font-semibold text-text">
             Recent transactions
           </h3>
@@ -220,7 +220,7 @@ function CategoryBars({
           <button
             key={s.category}
             onClick={() => onOpen(s.category)}
-            className="group flex w-full items-center gap-3 py-[9px] text-left"
+            className="group flex w-full items-center gap-2.5 py-[9px] text-left sm:gap-3"
             aria-label={`${prettyCategory(s.category)}, ${currencyCents(
               s.spent
             )}. View transactions.`}
@@ -230,7 +230,7 @@ function CategoryBars({
               style={{ background: color }}
               aria-hidden
             />
-            <span className="w-[104px] shrink-0 truncate text-[13px] font-medium text-text group-hover:text-primary">
+            <span className="w-24 shrink-0 truncate text-[13px] font-medium text-text group-hover:text-primary sm:w-[104px]">
               {prettyCategory(s.category)}
             </span>
             <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
@@ -239,7 +239,7 @@ function CategoryBars({
                 style={{ width: `${barPct}%`, background: color }}
               />
             </span>
-            <span className="num w-16 shrink-0 text-right text-[13px] text-text">
+            <span className="num min-w-16 shrink-0 whitespace-nowrap text-right text-[13px] text-text">
               {currencyCents(s.spent)}
             </span>
             <span className="w-8 shrink-0 text-right text-[11px] text-subtle">

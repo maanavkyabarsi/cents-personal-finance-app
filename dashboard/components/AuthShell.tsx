@@ -18,7 +18,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
         </Card>
       </main>
 
-      <footer className="px-4 pb-6 text-center text-xs text-subtle">
+      <footer className="px-4 pb-[calc(1.5rem+var(--safe-b))] text-center text-xs text-subtle">
         cents · personal finance dashboard
       </footer>
     </div>

@@ -101,7 +101,7 @@ function CategoryCard({
                 }}
                 aria-hidden
               />
-              <span className="tnum w-16 shrink-0 text-right text-xs font-medium text-text">
+              <span className="tnum min-w-16 shrink-0 whitespace-nowrap text-right text-xs font-medium text-text">
                 {currency(d.spent)}
               </span>
             </li>

@@ -88,7 +88,7 @@ export function TransactionsDrawer({
         onClick={onClose}
         aria-hidden
       />
-      <aside className="animate-slide-in relative flex h-full w-full max-w-md flex-col border-l border-border bg-surface shadow-[var(--shadow-lg)]">
+      <aside className="animate-slide-in relative flex h-full w-full max-w-md flex-col pt-[var(--safe-t)] pr-[var(--safe-r)] pb-[var(--safe-b)] border-l border-border bg-surface shadow-[var(--shadow-lg)]">
         <header className="flex items-start gap-3 border-b border-border px-5 py-4">
           <span
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"

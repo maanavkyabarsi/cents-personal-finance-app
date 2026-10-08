@@ -280,7 +280,7 @@ export function Dashboard() {
       <div className="flex min-w-0 flex-1">
         <Sidebar active={view} onSelect={setView} />
 
-        <main className="w-full min-w-0 flex-1 px-5 pb-24 pt-7 lg:px-10 lg:pb-12">
+        <main className="w-full min-w-0 flex-1 pl-[max(1.25rem,var(--safe-l))] pr-[max(1.25rem,var(--safe-r))] pb-[calc(6rem+var(--safe-b))] pt-7 lg:px-10 lg:pb-12">
           <div className="mx-auto w-full max-w-6xl">
             <PageHeader
               title={meta.title}

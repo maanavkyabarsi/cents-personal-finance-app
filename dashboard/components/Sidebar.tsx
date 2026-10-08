@@ -55,7 +55,7 @@ export function Sidebar({
   onSelect: (v: ViewId) => void;
 }) {
   return (
-    <aside className="sticky top-[65px] hidden h-[calc(100dvh-65px)] w-56 shrink-0 flex-col border-r border-border px-4 py-7 lg:flex">
+    <aside className="sticky top-[var(--topbar-total)] hidden h-[calc(100dvh-var(--topbar-total))] w-56 shrink-0 flex-col border-r border-border px-4 py-7 lg:flex">
       <p className="px-3 pb-2.5 text-[11px] font-medium uppercase tracking-[0.08em] text-subtle">
         Menu
       </p>
@@ -75,7 +75,7 @@ export function BottomNav({
 }) {
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-30 flex gap-1 border-t border-border bg-surface/95 px-3 pb-[env(safe-area-inset-bottom)] pt-1.5 backdrop-blur lg:hidden"
+      className="fixed inset-x-0 bottom-0 z-30 flex gap-1 border-t border-border bg-surface/95 pl-[max(0.75rem,var(--safe-l))] pr-[max(0.75rem,var(--safe-r))] pb-[var(--safe-b)] pt-1.5 backdrop-blur lg:hidden"
       aria-label="Primary"
     >
       <NavItems active={active} onSelect={onSelect} layout="bar" />

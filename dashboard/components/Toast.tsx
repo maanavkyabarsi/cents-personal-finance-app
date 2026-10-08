@@ -24,7 +24,7 @@ export function Toast({
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 bottom-20 z-[60] flex justify-center px-4 lg:bottom-6"
+      className="pointer-events-none fixed inset-x-0 bottom-[calc(5rem+var(--safe-b))] z-[60] flex justify-center px-4 lg:bottom-6"
       aria-live="polite"
     >
       {toast && (
