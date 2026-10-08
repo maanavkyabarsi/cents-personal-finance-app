@@ -6,9 +6,9 @@ import { MAX_SESSION_SECONDS, SESSION_EXPIRED_CODE } from "./lib/session";
 export async function proxy(request: NextRequest) {
     const authorization = request.headers.get("authorization")
     if (authorization) {
-        const [bearer, token] = authorization.split(" ", 2)
-        let uid
-        let authTime
+        const [, token] = authorization.split(" ", 2)
+        let uid: string
+        let authTime: number
 
         try {
             const decodedToken = await admin_auth.verifyIdToken(token)
