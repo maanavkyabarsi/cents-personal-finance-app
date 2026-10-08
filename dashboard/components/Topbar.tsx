@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { monthLabel } from "@/lib/format";
 import { Check, ChevronDown, LogOut, Refresh, RingMark } from "./icons";
 import { cx } from "./primitives";
@@ -20,6 +20,9 @@ function AccountSelect({
   onChange: (id: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [shift, setShift] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const current = value
     ? options.find((o) => o.id === value)?.label ?? "Account"
     : "All accounts";
@@ -31,8 +34,22 @@ function AccountSelect({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
+  // Keep the menu inside the viewport regardless of where the button sits.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const wrap = wrapRef.current;
+    const menu = menuRef.current;
+    if (!wrap || !menu) return;
+    const margin = 12;
+    const vw = document.documentElement.clientWidth;
+    const left = wrap.getBoundingClientRect().left;
+    const width = menu.offsetWidth;
+    const clamped = Math.max(margin, Math.min(left, vw - margin - width));
+    setShift(clamped - left);
+  }, [open, options]);
+
   return (
-    <div className="relative">
+    <div className="relative" ref={wrapRef}>
       <button
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="listbox"
@@ -50,7 +67,9 @@ function AccountSelect({
             aria-hidden
           />
           <div
-            className="absolute right-0 z-40 mt-1.5 min-w-[224px] max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-surface p-1 shadow-[var(--shadow-lg)]"
+            ref={menuRef}
+            style={{ left: shift }}
+            className="absolute z-40 mt-1.5 w-max min-w-[224px] max-w-[min(22rem,calc(100vw-1.5rem))] rounded-xl border border-border bg-surface p-1 shadow-[var(--shadow-lg)]"
             role="listbox"
           >
             <AccountRow
@@ -98,7 +117,7 @@ function AccountRow({
         selected ? "font-medium text-text" : "text-muted"
       )}
     >
-      <span className="truncate">{label}</span>
+      <span className="min-w-0 break-words">{label}</span>
       {selected && <Check size={15} className="shrink-0 text-primary" />}
     </button>
   );
