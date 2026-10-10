@@ -1,33 +1,21 @@
-import plaid
-from plaid.api import plaid_api
-from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
-from google.cloud import secretmanager
+import sys
 import json
-import os
-from dotenv import load_dotenv
+from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
+from main import secret_value_puller, get_plaid_client
 
-load_dotenv()
-project_id = os.getenv("PROJECT_ID")
+# Points every item in plaid-item-map at the given webhook URL.
+# Usage: python set_webhook.py https://REGION-PROJECT_ID.cloudfunctions.net/handle-webhook
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        sys.exit("Usage: python set_webhook.py WEBHOOK_URL")
+    webhook_url = sys.argv[1]
 
-def secret_value_puller(secret_name):
-    sm_client = secretmanager.SecretManagerServiceClient(transport="rest")
-    name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
-    response = sm_client.access_secret_version(request={"name": name})
-    return response.payload.data.decode("UTF-8")
-
-plaid_client_id = secret_value_puller("plaid-client-id")
-plaid_secret = secret_value_puller("plaid-secret")
-access_token = secret_value_puller("plaid-access-token-wells-fargo")
-
-configuration = plaid.Configuration(
-    host=plaid.Environment.Production,
-    api_key={"clientId": plaid_client_id, "secret": plaid_secret}
-)
-client = plaid_api.PlaidApi(plaid.ApiClient(configuration))
-
-request = ItemWebhookUpdateRequest(
-    access_token=access_token,
-    webhook="YOUR_WEBHOOK_URL"
-)
-response = client.item_webhook_update(request)
-print(response)
+    client = get_plaid_client()
+    plaid_item_map = json.loads(secret_value_puller("plaid-item-map"))
+    for item_id, secret_name in plaid_item_map.items():
+        request = ItemWebhookUpdateRequest(
+            access_token=secret_value_puller(secret_name),
+            webhook=webhook_url,
+        )
+        response = client.item_webhook_update(request)
+        print(f"{item_id} -> {response.item.webhook}")

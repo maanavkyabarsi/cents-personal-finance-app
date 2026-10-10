@@ -6,3 +6,4 @@ functions-framework
 python-dotenv
 prefect
 dbt-bigquery
+PyJWT[crypto]

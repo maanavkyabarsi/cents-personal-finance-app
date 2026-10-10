@@ -4,3 +4,4 @@ google-cloud-secret-manager
 google-cloud-firestore
 plaid-python
 python-dotenv
+PyJWT[crypto]

@@ -1,5 +1,10 @@
 import os
 import re
+import sys
+import time
+import hashlib
+import hmac
+import jwt
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 import functions_framework
@@ -12,6 +17,7 @@ from google.cloud import secretmanager
 from google.cloud import firestore
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
+from plaid.model.webhook_verification_key_get_request import WebhookVerificationKeyGetRequest
 
 load_dotenv()
 project_id=os.getenv("PROJECT_ID")
@@ -55,9 +61,44 @@ def get_plaid_client():
     return plaid_api.PlaidApi(api_client)
 
 
+# Plaid signs each webhook with an ES256 JWT in the Plaid-Verification header.
+# See https://plaid.com/docs/api/webhooks/webhook-verification/
+WEBHOOK_MAX_AGE_SECONDS = 5 * 60
+_webhook_key_cache = {}
+
+def get_webhook_verification_key(key_id):
+    if key_id not in _webhook_key_cache:
+        client = get_plaid_client()
+        response = client.webhook_verification_key_get(
+            WebhookVerificationKeyGetRequest(key_id=key_id)
+        )
+        _webhook_key_cache[key_id] = response.key.to_dict()
+    return _webhook_key_cache[key_id]
+
+def verify_webhook(token, raw_body):
+    try:
+        header = jwt.get_unverified_header(token)
+        if header.get("alg") != "ES256":
+            return False
+        jwk_dict = get_webhook_verification_key(header["kid"])
+        if jwk_dict.get("expired_at"):
+            return False
+        public_key = jwt.PyJWK(jwk_dict, algorithm="ES256").key
+        claims = jwt.decode(token, public_key, algorithms=["ES256"])
+    except Exception as e:
+        print(f"Webhook verification failed: {e}")
+        return False
+
+    if time.time() - claims.get("iat", 0) > WEBHOOK_MAX_AGE_SECONDS:
+        print("Webhook verification failed: token too old")
+        return False
+    body_hash = hashlib.sha256(raw_body).hexdigest()
+    return hmac.compare_digest(body_hash, claims.get("request_body_sha256", ""))
+
 @functions_framework.http
 def handle_webhook(request):
-    if not request.headers.get('Plaid-Verification'):
+    token = request.headers.get('Plaid-Verification')
+    if not token or not verify_webhook(token, request.get_data()):
         return ('Unauthorized', 401)
     print("Webhook received")
     body = request.get_json()
@@ -198,15 +239,11 @@ def sync_accounts():
     job.result()
     return rows
 
-@functions_framework.http
-def test_sync(request):
-    transactions, removed_ids, cursor = transactions_sync("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
-    write_to_bronze(transactions=transactions, removed_ids=removed_ids)
-    save_cursor("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P", cursor)
-    return (f"Synced {len(transactions)} transactions", 200)
-
 if __name__ == "__main__":
-    transactions, removed_ids, cursor = transactions_sync("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P")
+    if len(sys.argv) != 2:
+        sys.exit("Usage: python main.py ITEM_ID")
+    item_id = sys.argv[1]
+    transactions, removed_ids, cursor = transactions_sync(item_id)
     write_to_bronze(transactions=transactions, removed_ids=removed_ids)
-    save_cursor("y1Q0kOgzdnS8bNOvDjwKsbBoQ603ewIXavb0P", cursor)
+    save_cursor(item_id, cursor)
     print(f"Synced {len(transactions)} transactions")
