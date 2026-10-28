@@ -255,7 +255,7 @@ dbt compile --project-dir dbt --profiles-dir dbt/profiles
 
 **Schema naming:** `dbt/macros/generate_schema_name.sql` overrides dbt's default so `+schema: silver` yields a dataset named exactly `silver`, not `<default>_silver`. That is why the datasets in step 2c must be named exactly `bronze`, `silver` and `gold`.
 
-**Excluding an account (optional):** if the same real account ends up linked under two Plaid items (for example after re-linking a bank), its transactions arrive twice with different IDs. Set `EXCLUDED_ACCOUNT_IDS` to a comma-separated list of Plaid `account_id`s and `silver_transactions` will skip them. Bronze is untouched, so this is reversible. Under Prefect, set it as an environment variable on the work pool (not in `prefect.yaml`) so account IDs stay out of the repo.
+**Excluding an account (optional):** if the same real account ends up linked under two Plaid items (for example after re-linking a bank), its transactions arrive twice with different IDs. Set `EXCLUDED_ACCOUNT_IDS` to a comma-separated list of Plaid `account_id`s and `silver_transactions` will skip them. Append `:YYYY-MM-DD` to an ID (e.g. `ACCOUNT_ID:2026-01-01`) to skip only transactions dated on or after that day, which keeps older history the new item doesn't have (dates can differ by a few days between items, so pick the cutoff by comparing both). Bronze is untouched, so this is reversible. Under Prefect, set it as an environment variable on the work pool (not in `prefect.yaml`) so account IDs stay out of the repo.
 
 ---
 

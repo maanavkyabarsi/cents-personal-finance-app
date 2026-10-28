@@ -2,8 +2,10 @@
 
 {# Optional: comma-separated Plaid account_ids to leave out of silver (e.g. an account
    that was re-linked under a new Item and would otherwise be counted twice).
+   Each entry is `account_id` (exclude everything) or `account_id:YYYY-MM-DD` (exclude
+   only transactions dated on/after that day, keeping older history the new item lacks).
    Set EXCLUDED_ACCOUNT_IDS in the environment dbt runs in; empty by default. #}
-{% set excluded_account_ids = env_var('EXCLUDED_ACCOUNT_IDS', '').split(',') | map('trim') | reject('equalto', '') | list %}
+{% set exclusions = env_var('EXCLUDED_ACCOUNT_IDS', '').split(',') | map('trim') | reject('equalto', '') | list %}
 
 SELECT
     JSON_VALUE(raw_data, '$.transaction_id') AS transaction_id,
@@ -24,6 +26,7 @@ FROM {{ source('bronze', 'transactions') }}
 QUALIFY ROW_NUMBER() OVER (PARTITION BY JSON_VALUE(raw_data, '$.transaction_id') ORDER BY ingested_at DESC) = 1
     AND JSON_VALUE(raw_data, '$.removed') IS NULL
     AND JSON_VALUE(raw_data, '$.pending') = 'false'
-{%- if excluded_account_ids %}
-    AND NOT COALESCE(JSON_VALUE(raw_data, '$.account_id') IN ({% for id in excluded_account_ids %}'{{ id }}'{{ ', ' if not loop.last }}{% endfor %}), FALSE)
-{%- endif %}
+{%- for entry in exclusions %}
+{%- set parts = entry.split(':') %}
+    AND NOT COALESCE(JSON_VALUE(raw_data, '$.account_id') = '{{ parts[0] }}'{% if parts | length > 1 %} AND CAST(JSON_VALUE(raw_data, '$.date') AS DATE) >= DATE '{{ parts[1] }}'{% endif %}, FALSE)
+{%- endfor %}
