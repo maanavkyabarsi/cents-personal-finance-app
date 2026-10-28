@@ -52,6 +52,8 @@ export function Dashboard() {
   const [months, setMonths] = useState<string[]>([]);
   const [summaries, setSummaries] = useState<CategorySummary[]>([]);
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  // Bumped after an ignore/unignore so totals and transaction lists refetch.
+  const [dataVersion, setDataVersion] = useState(0);
 
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setRefreshing(true);
@@ -175,7 +177,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveMonth, accountId, summaryKey]);
+  }, [effectiveMonth, accountId, summaryKey, dataVersion]);
 
   const spentByCategory = useMemo(() => {
     const m = new Map<string, number>();
@@ -203,7 +205,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveMonth, accountId, recentKey]);
+  }, [effectiveMonth, accountId, recentKey, dataVersion]);
 
   const recentRows = recent && recent.key === recentKey ? recent.rows : null;
 
@@ -265,6 +267,34 @@ export function Dashboard() {
       }
     },
     [loadOverall]
+  );
+
+  const handleToggleIgnore = useCallback(
+    async (transactionId: string, ignore: boolean) => {
+      try {
+        const res = await authFetch("/api/transactions/ignore", {
+          method: ignore ? "POST" : "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transaction_id: transactionId }),
+        });
+        if (!res.ok) throw new Error();
+        setDataVersion((v) => v + 1);
+        setToast({
+          id: Date.now(),
+          message: ignore ? "Transaction ignored" : "Transaction restored",
+          tone: "success",
+        });
+        return true;
+      } catch {
+        setToast({
+          id: Date.now(),
+          message: ignore ? "Couldn't ignore transaction" : "Couldn't restore transaction",
+          tone: "error",
+        });
+        return false;
+      }
+    },
+    []
   );
 
   const overallSpent = overview?.totalSpent ?? 0;
@@ -337,6 +367,7 @@ export function Dashboard() {
                 accountId={accountId}
                 onOpenCategory={openCategory}
                 onViewAll={() => setView("categories")}
+                onToggleIgnore={handleToggleIgnore}
               />
             ) : view === "categories" ? (
               <CategoriesView
@@ -361,7 +392,12 @@ export function Dashboard() {
       </div>
 
       <BottomNav active={view} onSelect={setView} />
-      <TransactionsDrawer target={drawer} onClose={() => setDrawer(null)} />
+      <TransactionsDrawer
+        target={drawer}
+        onClose={() => setDrawer(null)}
+        version={dataVersion}
+        onToggleIgnore={handleToggleIgnore}
+      />
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );

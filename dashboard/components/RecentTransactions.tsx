@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { currencyCents, dateStr, dayLabel, num, prettyCategory } from "@/lib/format";
 import type { TransactionRow } from "@/lib/types";
 import { Inbox } from "./icons";
@@ -9,7 +10,25 @@ function txnTitle(t: TransactionRow): string {
   return t.merchant_name || t.transaction_name || "Transaction";
 }
 
-export function RecentTransactions({ rows }: { rows: TransactionRow[] | null }) {
+export function RecentTransactions({
+  rows,
+  onToggleIgnore,
+}: {
+  rows: TransactionRow[] | null;
+  onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
+}) {
+  const [pending, setPending] = useState<Set<string>>(new Set());
+
+  const toggle = async (t: TransactionRow) => {
+    setPending((p) => new Set(p).add(t.transaction_id));
+    await onToggleIgnore(t.transaction_id, !t.is_ignored);
+    setPending((p) => {
+      const next = new Set(p);
+      next.delete(t.transaction_id);
+      return next;
+    });
+  };
+
   if (rows === null) {
     return (
       <div>
@@ -50,22 +69,24 @@ export function RecentTransactions({ rows }: { rows: TransactionRow[] | null }) 
 
   return (
     <div>
-      {sorted.map((t, i) => {
+      {sorted.map((t) => {
         const title = txnTitle(t);
         const amt = num(t.amount);
         const refund = amt < 0;
         return (
           <div
-            key={i}
-            className="flex items-center gap-3 border-t border-border py-2.5 first:border-t-0"
+            key={t.transaction_id}
+            className="group flex items-center gap-3 border-t border-border py-2.5 first:border-t-0"
           >
             <span
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-surface-2 text-[13px] font-semibold text-primary"
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-surface-2 text-[13px] font-semibold text-primary ${
+                t.is_ignored ? "opacity-50" : ""
+              }`}
               aria-hidden
             >
               {title.charAt(0).toUpperCase()}
             </span>
-            <div className="min-w-0 flex-1">
+            <div className={`min-w-0 flex-1 ${t.is_ignored ? "opacity-50" : ""}`}>
               <p className="truncate text-[13px] font-medium text-text">{title}</p>
               <p className="truncate text-[11.5px] text-subtle">
                 {prettyCategory(t.pfc_primary ?? null)}
@@ -77,11 +98,20 @@ export function RecentTransactions({ rows }: { rows: TransactionRow[] | null }) 
             <span
               className={`num shrink-0 text-[13px] font-medium ${
                 refund ? "text-accent" : "text-text"
-              }`}
+              } ${t.is_ignored ? "line-through opacity-50" : ""}`}
             >
               {refund ? "+" : "−"}
               {currencyCents(Math.abs(amt))}
             </span>
+            <button
+              type="button"
+              onClick={() => toggle(t)}
+              disabled={pending.has(t.transaction_id)}
+              aria-label={`${t.is_ignored ? "Restore" : "Ignore"} ${title}`}
+              className="shrink-0 cursor-pointer rounded-md px-1.5 py-1 text-[11.5px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t.is_ignored ? "Restore" : "Ignore"}
+            </button>
           </div>
         );
       })}

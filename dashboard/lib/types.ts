@@ -14,6 +14,8 @@ export interface SpendingRow {
 }
 
 export interface TransactionRow {
+  transaction_id: string;
+  is_ignored: boolean;
   transaction_name: string | null;
   merchant_name?: string | null;
   amount: BqNumber;

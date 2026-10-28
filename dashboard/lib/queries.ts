@@ -4,6 +4,145 @@ import { budgetStatus, monthProgress } from '@/lib/derive'
 
 export const OVERALL_CATEGORY = '__OVERALL__'
 
+// gold.spending_by_category minus the ledger of ignored amounts. Use in place of the
+// gold table anywhere totals are read so ignored transactions drop out immediately.
+const ADJUSTED_SPENDING = `(
+    SELECT
+        g.account_id,
+        g.primary_category,
+        g.detailed_category,
+        g.month,
+        ROUND(g.total_spending - COALESCE(a.adjustment, 0), 2) AS total_spending
+    FROM gold.spending_by_category AS g
+    LEFT JOIN gold.spending_adjustments AS a
+        ON g.account_id = a.account_id
+        AND g.month = a.month
+        AND g.primary_category IS NOT DISTINCT FROM a.primary_category
+        AND g.detailed_category IS NOT DISTINCT FROM a.detailed_category
+)`
+
+// Recomputes the one adjustment row for the key bound to @account_id, @month,
+// @primary_category and @detailed_category from ignored_transactions joined to silver.
+// The pfc_detailed filter must match dbt/models/gold/gold_spending_by_category.sql
+// exactly (including dropping NULLs), as must the rebuild in prefect/flow.py.
+const RECOMPUTE_ADJUSTMENT_KEY = `
+    DELETE FROM gold.spending_adjustments
+    WHERE account_id = @account_id
+        AND month = @month
+        AND primary_category IS NOT DISTINCT FROM @primary_category
+        AND detailed_category IS NOT DISTINCT FROM @detailed_category;
+
+    INSERT INTO gold.spending_adjustments (account_id, primary_category, detailed_category, month, adjustment)
+    SELECT
+        t.account_id,
+        t.pfc_primary,
+        t.pfc_detailed,
+        DATE_TRUNC(t.transaction_date, MONTH),
+        ROUND(SUM(t.amount), 2)
+    FROM silver.transactions AS t
+    JOIN gold.ignored_transactions AS i USING (transaction_id)
+    WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+        AND t.account_id = @account_id
+        AND DATE_TRUNC(t.transaction_date, MONTH) = @month
+        AND t.pfc_primary IS NOT DISTINCT FROM @primary_category
+        AND t.pfc_detailed IS NOT DISTINCT FROM @detailed_category
+    GROUP BY 1, 2, 3, 4;
+`
+
+// Looks up the gold key a transaction belongs to, server-side, so the client only
+// ever sends an ID. Returns null if the transaction isn't in silver.
+async function lookup_adjustment_key(transaction_id: string) {
+    const query = `
+        SELECT
+            account_id,
+            pfc_primary AS primary_category,
+            pfc_detailed AS detailed_category,
+            DATE_TRUNC(transaction_date, MONTH) AS month
+        FROM silver.transactions
+        WHERE transaction_id = @transaction_id
+        LIMIT 1
+    `;
+
+    const options = {
+        query,
+        location: 'US',
+        params: { transaction_id },
+    };
+
+    const [job] = await bigquery.createQueryJob(options);
+    console.log(`Job ${job.id} started.`);
+
+    const [rows] = await job.getQueryResults();
+    if (rows.length === 0) return null;
+
+    const row = rows[0]
+    return {
+        account_id: row.account_id as string | null,
+        primary_category: row.primary_category as string | null,
+        detailed_category: row.detailed_category as string | null,
+        month: bigquery.date(row.month?.value ?? row.month),
+    }
+}
+
+async function set_transaction_ignored(transaction_id: string, ignored: boolean, uid: string | null) {
+    try {
+        const key = await lookup_adjustment_key(transaction_id)
+        if (!key) return { found: false }
+
+        const toggle = ignored
+            ? `
+                INSERT INTO gold.ignored_transactions (transaction_id, ignored_at, ignored_by)
+                SELECT @transaction_id, CURRENT_TIMESTAMP(), @uid
+                FROM (SELECT 1)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM gold.ignored_transactions WHERE transaction_id = @transaction_id
+                );
+            `
+            : `
+                DELETE FROM gold.ignored_transactions WHERE transaction_id = @transaction_id;
+            `;
+
+        const query = `
+            BEGIN TRANSACTION;
+            ${toggle}
+            ${RECOMPUTE_ADJUSTMENT_KEY}
+            COMMIT TRANSACTION;
+        `;
+
+        const options = {
+            query,
+            location: 'US',
+            params: { transaction_id, uid, ...key },
+            types: {
+                transaction_id: 'STRING',
+                uid: 'STRING',
+                account_id: 'STRING',
+                primary_category: 'STRING',
+                detailed_category: 'STRING',
+                month: 'DATE',
+            },
+        };
+
+        const [job] = await bigquery.createQueryJob(options);
+        console.log(`Job ${job.id} started.`);
+        await job.getQueryResults();
+        return { found: true }
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error:', error);
+        throw error;
+    }
+}
+
+export async function ignore_transaction(transaction_id: string, uid: string | null) {
+    return set_transaction_ignored(transaction_id, true, uid)
+}
+
+export async function unignore_transaction(transaction_id: string) {
+    return set_transaction_ignored(transaction_id, false, null)
+}
+
 export async function retrieve_accounts() {
     try {
         const query = `
@@ -41,7 +180,7 @@ export async function gold_spending_by_category() {
                 s.account_id,
                 b.budget_limit,
                 b.updated_at AS budget_updated_at
-            FROM gold.spending_by_category AS s
+            FROM ${ADJUSTED_SPENDING} AS s
             LEFT JOIN gold.budget_limits AS b
             ON s.primary_category = b.primary_category
         `;
@@ -137,11 +276,14 @@ export async function retrieve_transactions_primary_category_month(primary_categ
 
         const query = `
             SELECT
+                transaction_id,
                 transaction_name,
                 amount,
                 transaction_date,
-                pfc_primary
+                pfc_primary,
+                i.transaction_id IS NOT NULL AS is_ignored
             FROM silver.transactions
+            LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
             WHERE pfc_primary = @primary_category AND DATE_TRUNC(transaction_date, MONTH) = @month_year AND COALESCE(pfc_detailed, '') != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
               ${accountFilter}
         `;
@@ -176,12 +318,15 @@ export async function retrieve_recent_transactions(month_year: string, account_i
 
         const query = `
             SELECT
+                transaction_id,
                 transaction_name,
                 merchant_name,
                 amount,
                 transaction_date,
-                pfc_primary
+                pfc_primary,
+                i.transaction_id IS NOT NULL AS is_ignored
             FROM silver.transactions
+            LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
             WHERE DATE_TRUNC(transaction_date, MONTH) = @month_year
               AND COALESCE(pfc_detailed, '') != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
               ${accountFilter}
@@ -212,11 +357,14 @@ export async function retrieve_transactions_detailed_category_month(detailed_cat
     try {
         const query = `
             SELECT
+                transaction_id,
                 transaction_name,
                 amount,
                 transaction_date,
-                pfc_detailed
+                pfc_detailed,
+                i.transaction_id IS NOT NULL AS is_ignored
             FROM silver.transactions
+            LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
             WHERE pfc_detailed = @detailed_category AND DATE_TRUNC(transaction_date, MONTH) = @month_year
         `;
 
@@ -243,11 +391,14 @@ export async function retrieve_transactions_account(account_id: string) {
     try {
         const query = `
             SELECT
+                transaction_id,
                 transaction_name,
                 amount,
                 transaction_date,
-                account_id
+                account_id,
+                i.transaction_id IS NOT NULL AS is_ignored
             FROM silver.transactions
+            LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
             WHERE account_id = @account_id
         `;
         
@@ -275,8 +426,9 @@ export async function retrieve_total_spending_month(month_year: string) {
         const query = `
             SELECT
                 SUM(amount) as total_amount_spent,
-            FROM silver.transactions
+            FROM silver.transactions AS t
             WHERE DATE_TRUNC(transaction_date, MONTH) = @month_year
+                AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
         `;
 
         const options = {
@@ -372,7 +524,7 @@ export async function retrieve_category_summaries(month_year: string, account_id
                 s.detailed_category,
                 s.total_spending,
                 b.budget_limit
-            FROM gold.spending_by_category AS s
+            FROM ${ADJUSTED_SPENDING} AS s
             LEFT JOIN gold.budget_limits AS b
                 ON s.primary_category = b.primary_category
             WHERE DATE_TRUNC(s.month, MONTH) = @month_year
@@ -450,7 +602,7 @@ export async function retrieve_dashboard_overview(month_year: string, account_id
 
         const query = `
             SELECT primary_category, total_spending, month
-            FROM gold.spending_by_category
+            FROM ${ADJUSTED_SPENDING}
             WHERE DATE_TRUNC(month, MONTH) IN (@month_year, @prev_month_year)
                 ${accountFilter}
         `;
@@ -515,13 +667,14 @@ export async function retrieve_spending_trends(grain: string, start_date: string
             SELECT
                 DATE_TRUNC(transaction_date, ${grain}) AS period,
                 SUM(amount) AS total
-            FROM silver.transactions
+            FROM silver.transactions AS t
             WHERE
                 (transaction_date >= @start_date OR @start_date IS NULL)
                 AND (@account_id = account_id OR @account_id IS NULL)
                 AND (@primary_category = pfc_primary OR @primary_category IS NULL)
                 AND (@detailed_category = pfc_detailed OR @detailed_category IS NULL)
-                AND pfc_primary NOT IN ('INCOME', 'TRANSFER_IN')    
+                AND pfc_primary NOT IN ('INCOME', 'TRANSFER_IN')
+                AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
             GROUP BY period
             ORDER BY period
         `;

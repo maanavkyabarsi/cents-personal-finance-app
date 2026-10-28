@@ -78,7 +78,7 @@ bq mk --location=US --dataset YOUR_PROJECT_ID:gold
 
 ### 2d. Create the BigQuery tables you must create by hand
 
-dbt creates `silver.*` and `gold.spending_by_category`, and ingestion creates `gold.accounts` automatically. These two you create yourself:
+dbt creates `silver.*` and `gold.spending_by_category`, and ingestion creates `gold.accounts` automatically. These you create yourself:
 
 ```bash
 # Raw landing table written by the ingestion code
@@ -88,6 +88,14 @@ bq mk --table YOUR_PROJECT_ID:bronze.transactions \
 # Budget limits written by the dashboard's Budgets view
 bq mk --table YOUR_PROJECT_ID:gold.budget_limits \
   primary_category:STRING,budget_limit:FLOAT,updated_at:TIMESTAMP
+
+# Transactions ignored from the dashboard, and the per-category amounts to subtract
+# from gold.spending_by_category. The Prefect flow rebuilds spending_adjustments after
+# every dbt run; both must exist before the dashboard is deployed.
+bq mk --table YOUR_PROJECT_ID:gold.ignored_transactions \
+  transaction_id:STRING,ignored_at:TIMESTAMP,ignored_by:STRING
+bq mk --table YOUR_PROJECT_ID:gold.spending_adjustments \
+  account_id:STRING,primary_category:STRING,detailed_category:STRING,month:DATE,adjustment:FLOAT
 ```
 
 ### 2e. Create a Firestore database

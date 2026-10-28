@@ -24,14 +24,19 @@ export interface DrawerTarget {
 export function TransactionsDrawer({
   target,
   onClose,
+  version,
+  onToggleIgnore,
 }: {
   target: DrawerTarget | null;
   onClose: () => void;
+  version: number;
+  onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
 }) {
   const [result, setResult] = useState<{ key: string; rows: TransactionRow[] } | null>(
     null
   );
   const [errorKey, setErrorKey] = useState<string | null>(null);
+  const [pending, setPending] = useState<Set<string>>(new Set());
   const open = target !== null;
   const key = target
     ? `${target.category}__${target.month}__${target.accountId ?? ""}`
@@ -56,7 +61,27 @@ export function TransactionsDrawer({
     return () => {
       cancelled = true;
     };
-  }, [key, target]);
+  }, [key, target, version]);
+
+  const toggle = async (t: TransactionRow) => {
+    const ignore = !t.is_ignored;
+    setPending((p) => new Set(p).add(t.transaction_id));
+    const ok = await onToggleIgnore(t.transaction_id, ignore);
+    setPending((p) => {
+      const next = new Set(p);
+      next.delete(t.transaction_id);
+      return next;
+    });
+    if (!ok) return;
+    setResult((r) =>
+      r && {
+        ...r,
+        rows: r.rows.map((row) =>
+          row.transaction_id === t.transaction_id ? { ...row, is_ignored: ignore } : row
+        ),
+      }
+    );
+  };
 
   const rows = result && result.key === key ? result.rows : null;
   const error = errorKey === key;
@@ -79,7 +104,8 @@ export function TransactionsDrawer({
           )
       )
     : null;
-  const total = rows ? rows.reduce((s, r) => s + num(r.amount), 0) : 0;
+  const counted = rows ? rows.filter((r) => !r.is_ignored) : [];
+  const total = counted.reduce((s, r) => s + num(r.amount), 0);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true">
@@ -110,7 +136,8 @@ export function TransactionsDrawer({
         {rows && rows.length > 0 && (
           <div className="flex items-baseline justify-between border-b border-border bg-surface-2 px-5 py-3">
             <span className="text-sm text-muted">
-              {rows.length} transaction{rows.length === 1 ? "" : "s"}
+              {counted.length} transaction{counted.length === 1 ? "" : "s"}
+              {counted.length !== rows.length && ` · ${rows.length - counted.length} ignored`}
             </span>
             <span className="tnum text-sm font-semibold text-text">
               {currencyCents(total)}
@@ -151,15 +178,15 @@ export function TransactionsDrawer({
 
           {!error && sorted && sorted.length > 0 && (
             <ul className="divide-y divide-border">
-              {sorted.map((t, i) => {
+              {sorted.map((t) => {
                 const amt = num(t.amount);
                 const refund = amt < 0;
                 return (
                   <li
-                    key={i}
-                    className="flex items-center justify-between gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-surface-hover"
+                    key={t.transaction_id}
+                    className="group flex items-center justify-between gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-surface-hover"
                   >
-                    <div className="min-w-0">
+                    <div className={`min-w-0 flex-1 ${t.is_ignored ? "opacity-50" : ""}`}>
                       <p className="truncate text-sm font-medium text-text">
                         {t.transaction_name || "Unnamed transaction"}
                       </p>
@@ -170,11 +197,22 @@ export function TransactionsDrawer({
                     <span
                       className={`tnum shrink-0 text-sm font-semibold ${
                         refund ? "text-accent" : "text-text"
-                      }`}
+                      } ${t.is_ignored ? "line-through opacity-50" : ""}`}
                     >
                       {refund ? "+" : ""}
                       {currencyCents(Math.abs(amt))}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => toggle(t)}
+                      disabled={pending.has(t.transaction_id)}
+                      aria-label={`${t.is_ignored ? "Restore" : "Ignore"} ${
+                        t.transaction_name || "transaction"
+                      }`}
+                      className="shrink-0 cursor-pointer rounded-md px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {t.is_ignored ? "Restore" : "Ignore"}
+                    </button>
                   </li>
                 );
               })}

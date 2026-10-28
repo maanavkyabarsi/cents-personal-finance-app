@@ -38,6 +38,36 @@ def run_dbt():
     if result.returncode != 0:
         raise Exception(f"dbt run failed:\n{result.stderr}")
 
+# The dashboard updates gold.spending_adjustments incrementally when a transaction is
+# ignored; this rebuilds it from scratch against the freshly built silver so Plaid
+# modifications, recategorizations and removals are reflected. The pfc_detailed filter
+# must match dbt/models/gold/gold_spending_by_category.sql exactly (including dropping
+# NULLs), as must RECOMPUTE_ADJUSTMENT_KEY in dashboard/lib/queries.ts.
+@prefect.task
+def rebuild_spending_adjustments():
+    bq_client = bigquery.Client()
+    query = """
+        CREATE TABLE IF NOT EXISTS gold.ignored_transactions (
+            transaction_id STRING NOT NULL,
+            ignored_at TIMESTAMP,
+            ignored_by STRING
+        );
+
+        CREATE OR REPLACE TABLE gold.spending_adjustments AS
+        SELECT
+            t.account_id,
+            t.pfc_primary AS primary_category,
+            t.pfc_detailed AS detailed_category,
+            DATE_TRUNC(t.transaction_date, MONTH) AS month,
+            ROUND(SUM(t.amount), 2) AS adjustment
+        FROM silver.transactions AS t
+        JOIN gold.ignored_transactions AS i USING (transaction_id)
+        WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+        GROUP BY 1, 2, 3, 4;
+    """
+    bq_client.query(query, location="US").result()
+    print("Rebuilt gold.spending_adjustments")
+
 @prefect.flow
 def daily_sync():
     sa_key = Secret.load("gcp-sa-key").get()
@@ -59,6 +89,7 @@ def daily_sync():
         sync_and_store(item_id)
     sync_accounts()
     run_dbt()
+    rebuild_spending_adjustments()
 
 if __name__ == "__main__":
     daily_sync()
