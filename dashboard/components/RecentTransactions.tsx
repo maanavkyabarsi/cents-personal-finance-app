@@ -5,6 +5,7 @@ import { currencyCents, dateStr, dayLabel, num, prettyCategory } from "@/lib/for
 import type { TransactionRow } from "@/lib/types";
 import { Inbox } from "./icons";
 import { Skeleton } from "./primitives";
+import { CategoryTagMenu, TaggedBadge } from "./CategoryTagMenu";
 
 function txnTitle(t: TransactionRow): string {
   return t.merchant_name || t.transaction_name || "Transaction";
@@ -13,11 +14,23 @@ function txnTitle(t: TransactionRow): string {
 export function RecentTransactions({
   rows,
   onToggleIgnore,
+  onTagCategory,
 }: {
   rows: TransactionRow[] | null;
   onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
+  onTagCategory: (transactionId: string, category: string | null) => Promise<boolean>;
 }) {
   const [pending, setPending] = useState<Set<string>>(new Set());
+
+  const tag = async (t: TransactionRow, category: string | null) => {
+    setPending((p) => new Set(p).add(t.transaction_id));
+    await onTagCategory(t.transaction_id, category);
+    setPending((p) => {
+      const next = new Set(p);
+      next.delete(t.transaction_id);
+      return next;
+    });
+  };
 
   const toggle = async (t: TransactionRow) => {
     setPending((p) => new Set(p).add(t.transaction_id));
@@ -90,6 +103,7 @@ export function RecentTransactions({
               <p className="truncate text-[13px] font-medium text-text">{title}</p>
               <p className="truncate text-[11.5px] text-subtle">
                 {prettyCategory(t.pfc_primary ?? null)}
+                {t.is_tagged && <TaggedBadge original={t.original_pfc_primary} />}
               </p>
             </div>
             <span className="w-[52px] shrink-0 text-[11.5px] text-subtle">
@@ -103,6 +117,13 @@ export function RecentTransactions({
               {refund ? "+" : "−"}
               {currencyCents(Math.abs(amt))}
             </span>
+            <CategoryTagMenu
+              isTagged={!!t.is_tagged}
+              disabled={pending.has(t.transaction_id)}
+              label={`Tag category for ${title}`}
+              onSelect={(c) => tag(t, c)}
+              className="max-w-[64px] text-[11.5px]"
+            />
             <button
               type="button"
               onClick={() => toggle(t)}

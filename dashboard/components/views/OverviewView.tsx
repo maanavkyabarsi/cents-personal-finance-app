@@ -27,6 +27,7 @@ export function OverviewView({
   onOpenCategory,
   onViewAll,
   onToggleIgnore,
+  onTagCategory,
 }: {
   month: string;
   summaries: CategorySummary[];
@@ -36,6 +37,7 @@ export function OverviewView({
   onOpenCategory: (category: string) => void;
   onViewAll: () => void;
   onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
+  onTagCategory: (transactionId: string, category: string | null) => Promise<boolean>;
 }) {
   const totalSpent = overview?.totalSpent ?? 0;
   const hasBudget = overview?.budget != null && overview.budget > 0;
@@ -165,7 +167,11 @@ export function OverviewView({
           <h3 className="mb-4 text-[13.5px] font-semibold text-text">
             Recent transactions
           </h3>
-          <RecentTransactions rows={recent} onToggleIgnore={onToggleIgnore} />
+          <RecentTransactions
+            rows={recent}
+            onToggleIgnore={onToggleIgnore}
+            onTagCategory={onTagCategory}
+          />
 
           <div className="mt-5">
             <SpendingTrends accountId={accountId} />

@@ -14,6 +14,7 @@ import type { TransactionRow } from "@/lib/types";
 import { CategoryIcon, Close, Inbox, Alert } from "./icons";
 import { Button, EmptyState, Skeleton } from "./primitives";
 import { authFetch } from "@/lib/authFetch";
+import { CategoryTagMenu, TaggedBadge } from "./CategoryTagMenu";
 
 export interface DrawerTarget {
   category: string;
@@ -26,11 +27,13 @@ export function TransactionsDrawer({
   onClose,
   version,
   onToggleIgnore,
+  onTagCategory,
 }: {
   target: DrawerTarget | null;
   onClose: () => void;
   version: number;
   onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
+  onTagCategory: (transactionId: string, category: string | null) => Promise<boolean>;
 }) {
   const [result, setResult] = useState<{ key: string; rows: TransactionRow[] } | null>(
     null
@@ -81,6 +84,17 @@ export function TransactionsDrawer({
         ),
       }
     );
+  };
+
+  // The refetch triggered by the version bump drops the row from this category's list.
+  const tag = async (t: TransactionRow, category: string | null) => {
+    setPending((p) => new Set(p).add(t.transaction_id));
+    await onTagCategory(t.transaction_id, category);
+    setPending((p) => {
+      const next = new Set(p);
+      next.delete(t.transaction_id);
+      return next;
+    });
   };
 
   const rows = result && result.key === key ? result.rows : null;
@@ -189,6 +203,7 @@ export function TransactionsDrawer({
                     <div className={`min-w-0 flex-1 ${t.is_ignored ? "opacity-50" : ""}`}>
                       <p className="truncate text-sm font-medium text-text">
                         {t.transaction_name || "Unnamed transaction"}
+                        {t.is_tagged && <TaggedBadge original={t.original_pfc_primary} />}
                       </p>
                       <p className="text-xs text-subtle">
                         {dayLabel(dateStr(t.transaction_date))}
@@ -202,6 +217,13 @@ export function TransactionsDrawer({
                       {refund ? "+" : ""}
                       {currencyCents(Math.abs(amt))}
                     </span>
+                    <CategoryTagMenu
+                      isTagged={!!t.is_tagged}
+                      disabled={pending.has(t.transaction_id)}
+                      label={`Tag category for ${t.transaction_name || "transaction"}`}
+                      onSelect={(c) => tag(t, c)}
+                      className="max-w-[72px] text-xs"
+                    />
                     <button
                       type="button"
                       onClick={() => toggle(t)}

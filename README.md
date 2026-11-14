@@ -96,6 +96,11 @@ bq mk --table YOUR_PROJECT_ID:gold.ignored_transactions \
   transaction_id:STRING,ignored_at:TIMESTAMP,ignored_by:STRING
 bq mk --table YOUR_PROJECT_ID:gold.spending_adjustments \
   account_id:STRING,primary_category:STRING,detailed_category:STRING,month:DATE,adjustment:FLOAT
+
+# Manual category tags (e.g. a Zelle payment tagged as Food & Drink). One row per tagged
+# transaction; the original Plaid category in silver is never modified.
+bq mk --table YOUR_PROJECT_ID:gold.transaction_categories \
+  transaction_id:STRING,primary_category:STRING,tagged_at:TIMESTAMP,tagged_by:STRING
 ```
 
 ### 2e. Create a Firestore database
@@ -454,6 +459,8 @@ The Prefect flow imports `ingestion/main.py` directly (adding `ingestion/` to `s
 | `silver.transactions` | dbt | parsed + deduplicated: `transaction_id`, `account_id`, `amount`, `transaction_date`, `pfc_primary`, `pfc_detailed`, `merchant_name`, `transaction_name`, … |
 | `gold.spending_by_category` | dbt | `primary_category`, `detailed_category`, `total_spending`, `month`, `account_id` |
 | `gold.budget_limits` | you (step 2d); written by dashboard | `primary_category`, `budget_limit`, `updated_at` |
+| `gold.transaction_categories` | you (step 2d); written by dashboard | `transaction_id`, `primary_category`, `tagged_at`, `tagged_by`. Manual category overrides; applied at read time. |
+| `gold.spending_adjustments` | you (step 2d); rebuilt by dashboard and Prefect | `account_id`, `primary_category`, `detailed_category`, `month`, `adjustment`. Signed amount subtracted from `spending_by_category`: ignored/tagged transactions are subtracted at their original category, tagged ones are added (negative) at the tagged category. |
 | `gold.accounts` | ingestion (`sync_accounts`, truncated and reloaded each run) | `account_id`, `name`, `official_name`, `display_name`, `mask`, `type`, `subtype`, `item_id`, `updated_at` |
 
 ### Secret Manager secrets

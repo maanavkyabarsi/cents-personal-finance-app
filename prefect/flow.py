@@ -38,11 +38,13 @@ def run_dbt():
     if result.returncode != 0:
         raise Exception(f"dbt run failed:\n{result.stderr}")
 
-# The dashboard updates gold.spending_adjustments incrementally when a transaction is
-# ignored; this rebuilds it from scratch against the freshly built silver so Plaid
-# modifications, recategorizations and removals are reflected. The pfc_detailed filter
-# must match dbt/models/gold/gold_spending_by_category.sql exactly (including dropping
-# NULLs), as must RECOMPUTE_ADJUSTMENT_KEY in dashboard/lib/queries.ts.
+# The dashboard rebuilds gold.spending_adjustments when a transaction is ignored or
+# manually tagged; this rebuilds it against the freshly built silver so Plaid
+# modifications, recategorizations and removals are reflected. adjustment is an amount to
+# subtract: ignored/tagged transactions are subtracted at their original key, and tagged,
+# non-ignored ones are added (negative adjustment) at the tagged category. The pfc_detailed
+# filter must match dbt/models/gold/gold_spending_by_category.sql exactly (including
+# dropping NULLs), as must ADJUSTMENT_ROWS_SQL in dashboard/lib/queries.ts.
 @prefect.task
 def rebuild_spending_adjustments():
     bq_client = bigquery.Client()
@@ -53,16 +55,47 @@ def rebuild_spending_adjustments():
             ignored_by STRING
         );
 
+        CREATE TABLE IF NOT EXISTS gold.transaction_categories (
+            transaction_id STRING NOT NULL,
+            primary_category STRING,
+            tagged_at TIMESTAMP,
+            tagged_by STRING
+        );
+
         CREATE OR REPLACE TABLE gold.spending_adjustments AS
         SELECT
-            t.account_id,
-            t.pfc_primary AS primary_category,
-            t.pfc_detailed AS detailed_category,
-            DATE_TRUNC(t.transaction_date, MONTH) AS month,
-            ROUND(SUM(t.amount), 2) AS adjustment
-        FROM silver.transactions AS t
-        JOIN gold.ignored_transactions AS i USING (transaction_id)
-        WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+            account_id,
+            primary_category,
+            detailed_category,
+            month,
+            ROUND(SUM(adjustment), 2) AS adjustment
+        FROM (
+            SELECT
+                t.account_id,
+                t.pfc_primary AS primary_category,
+                t.pfc_detailed AS detailed_category,
+                DATE_TRUNC(t.transaction_date, MONTH) AS month,
+                t.amount AS adjustment
+            FROM silver.transactions AS t
+            WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+                AND (
+                    EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
+                    OR EXISTS (SELECT 1 FROM gold.transaction_categories AS c WHERE c.transaction_id = t.transaction_id)
+                )
+
+            UNION ALL
+
+            SELECT
+                t.account_id,
+                c.primary_category,
+                CAST(NULL AS STRING) AS detailed_category,
+                DATE_TRUNC(t.transaction_date, MONTH) AS month,
+                -t.amount AS adjustment
+            FROM silver.transactions AS t
+            JOIN gold.transaction_categories AS c USING (transaction_id)
+            WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+                AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
+        )
         GROUP BY 1, 2, 3, 4;
     """
     bq_client.query(query, location="US").result()

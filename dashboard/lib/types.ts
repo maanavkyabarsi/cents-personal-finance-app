@@ -22,6 +22,8 @@ export interface TransactionRow {
   transaction_date: BqDate;
   pfc_primary?: string | null;
   pfc_detailed?: string | null;
+  original_pfc_primary?: string | null;
+  is_tagged?: boolean;
 }
 
 export interface CategorySummary {
