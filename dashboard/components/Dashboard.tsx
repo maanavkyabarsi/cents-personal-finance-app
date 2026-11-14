@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { num } from "@/lib/format";
+import { num, prettyCategory } from "@/lib/format";
 import type {
   Account,
   CategorySummary,
@@ -297,6 +297,40 @@ export function Dashboard() {
     []
   );
 
+  const handleTagCategory = useCallback(
+    async (transactionId: string, category: string | null) => {
+      try {
+        const res = await authFetch("/api/transactions/category", {
+          method: category ? "POST" : "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            category
+              ? { transaction_id: transactionId, primary_category: category }
+              : { transaction_id: transactionId }
+          ),
+        });
+        if (!res.ok) throw new Error();
+        setDataVersion((v) => v + 1);
+        setToast({
+          id: Date.now(),
+          message: category
+            ? `Tagged as ${prettyCategory(category)}`
+            : "Tag removed",
+          tone: "success",
+        });
+        return true;
+      } catch {
+        setToast({
+          id: Date.now(),
+          message: category ? "Couldn't tag transaction" : "Couldn't remove tag",
+          tone: "error",
+        });
+        return false;
+      }
+    },
+    []
+  );
+
   const overallSpent = overview?.totalSpent ?? 0;
 
   const openCategory = useCallback(
@@ -368,6 +402,7 @@ export function Dashboard() {
                 onOpenCategory={openCategory}
                 onViewAll={() => setView("categories")}
                 onToggleIgnore={handleToggleIgnore}
+                onTagCategory={handleTagCategory}
               />
             ) : view === "categories" ? (
               <CategoriesView
@@ -397,6 +432,7 @@ export function Dashboard() {
         onClose={() => setDrawer(null)}
         version={dataVersion}
         onToggleIgnore={handleToggleIgnore}
+        onTagCategory={handleTagCategory}
       />
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>

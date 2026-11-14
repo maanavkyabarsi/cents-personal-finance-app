@@ -4,60 +4,100 @@ import { budgetStatus, monthProgress } from '@/lib/derive'
 
 export const OVERALL_CATEGORY = '__OVERALL__'
 
-// gold.spending_by_category minus the ledger of ignored amounts. Use in place of the
-// gold table anywhere totals are read so ignored transactions drop out immediately.
+// gold.spending_by_category plus the signed adjustment ledger. Use in place of the gold
+// table anywhere totals are read so ignored and manually tagged transactions shift
+// totals immediately. adjustment is an amount to subtract (negative = amount to add).
+// UNION ALL + GROUP BY (rather than a join) because a tag can add spending to a key
+// that has no gold row.
 const ADJUSTED_SPENDING = `(
     SELECT
-        g.account_id,
-        g.primary_category,
-        g.detailed_category,
-        g.month,
-        ROUND(g.total_spending - COALESCE(a.adjustment, 0), 2) AS total_spending
-    FROM gold.spending_by_category AS g
-    LEFT JOIN gold.spending_adjustments AS a
-        ON g.account_id = a.account_id
-        AND g.month = a.month
-        AND g.primary_category IS NOT DISTINCT FROM a.primary_category
-        AND g.detailed_category IS NOT DISTINCT FROM a.detailed_category
+        account_id,
+        primary_category,
+        detailed_category,
+        month,
+        ROUND(SUM(total_spending), 2) AS total_spending
+    FROM (
+        SELECT account_id, primary_category, detailed_category, month, total_spending
+        FROM gold.spending_by_category
+        UNION ALL
+        SELECT account_id, primary_category, detailed_category, month, -adjustment AS total_spending
+        FROM gold.spending_adjustments
+    )
+    GROUP BY account_id, primary_category, detailed_category, month
 )`
 
-// Recomputes the one adjustment row for the key bound to @account_id, @month,
-// @primary_category and @detailed_category from ignored_transactions joined to silver.
+// silver.transactions with manual category tags applied. pfc_primary is the effective
+// category; a tagged transaction has no detailed category. The original primary category
+// is kept in original_pfc_primary. Alias it (AS t) where used.
+const EFFECTIVE_TRANSACTIONS = `(
+    SELECT
+        t.* EXCEPT (pfc_primary, pfc_detailed),
+        COALESCE(c.primary_category, t.pfc_primary) AS pfc_primary,
+        IF(c.transaction_id IS NULL, t.pfc_detailed, NULL) AS pfc_detailed,
+        t.pfc_primary AS original_pfc_primary,
+        c.transaction_id IS NOT NULL AS is_tagged
+    FROM silver.transactions AS t
+    LEFT JOIN gold.transaction_categories AS c USING (transaction_id)
+)`
+
+// The full set of rows for gold.spending_adjustments, derived from silver, the ignored
+// list and the tag table:
+//  - remove side: every ignored or tagged transaction is subtracted at its ORIGINAL key
+//  - add side: every tagged, non-ignored transaction is added at (tagged category, no
+//    detailed category), expressed as a negative adjustment
 // The pfc_detailed filter must match dbt/models/gold/gold_spending_by_category.sql
 // exactly (including dropping NULLs), as must the rebuild in prefect/flow.py.
-const RECOMPUTE_ADJUSTMENT_KEY = `
-    DELETE FROM gold.spending_adjustments
-    WHERE account_id = @account_id
-        AND month = @month
-        AND primary_category IS NOT DISTINCT FROM @primary_category
-        AND detailed_category IS NOT DISTINCT FROM @detailed_category;
-
-    INSERT INTO gold.spending_adjustments (account_id, primary_category, detailed_category, month, adjustment)
+const ADJUSTMENT_ROWS_SQL = `
     SELECT
-        t.account_id,
-        t.pfc_primary,
-        t.pfc_detailed,
-        DATE_TRUNC(t.transaction_date, MONTH),
-        ROUND(SUM(t.amount), 2)
-    FROM silver.transactions AS t
-    JOIN gold.ignored_transactions AS i USING (transaction_id)
-    WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
-        AND t.account_id = @account_id
-        AND DATE_TRUNC(t.transaction_date, MONTH) = @month
-        AND t.pfc_primary IS NOT DISTINCT FROM @primary_category
-        AND t.pfc_detailed IS NOT DISTINCT FROM @detailed_category
-    GROUP BY 1, 2, 3, 4;
+        account_id,
+        primary_category,
+        detailed_category,
+        month,
+        ROUND(SUM(adjustment), 2) AS adjustment
+    FROM (
+        SELECT
+            t.account_id,
+            t.pfc_primary AS primary_category,
+            t.pfc_detailed AS detailed_category,
+            DATE_TRUNC(t.transaction_date, MONTH) AS month,
+            t.amount AS adjustment
+        FROM silver.transactions AS t
+        WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+            AND (
+                EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
+                OR EXISTS (SELECT 1 FROM gold.transaction_categories AS c WHERE c.transaction_id = t.transaction_id)
+            )
+
+        UNION ALL
+
+        SELECT
+            t.account_id,
+            c.primary_category,
+            CAST(NULL AS STRING) AS detailed_category,
+            DATE_TRUNC(t.transaction_date, MONTH) AS month,
+            -t.amount AS adjustment
+        FROM silver.transactions AS t
+        JOIN gold.transaction_categories AS c USING (transaction_id)
+        WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+            AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
+    )
+    GROUP BY account_id, primary_category, detailed_category, month
 `
 
-// Looks up the gold key a transaction belongs to, server-side, so the client only
-// ever sends an ID. Returns null if the transaction isn't in silver.
-async function lookup_adjustment_key(transaction_id: string) {
+// Rebuilds the whole ledger (the tables are tiny). Runs inside the same BigQuery
+// transaction as the ignore/tag write so the two can't drift apart.
+const REBUILD_ADJUSTMENTS = `
+    DELETE FROM gold.spending_adjustments WHERE TRUE;
+
+    INSERT INTO gold.spending_adjustments (account_id, primary_category, detailed_category, month, adjustment)
+    ${ADJUSTMENT_ROWS_SQL};
+`
+
+// Looks up a transaction in silver, server-side, so the client only ever sends an ID.
+// Returns null if the transaction isn't in silver.
+async function lookup_transaction(transaction_id: string) {
     const query = `
-        SELECT
-            account_id,
-            pfc_primary AS primary_category,
-            pfc_detailed AS detailed_category,
-            DATE_TRUNC(transaction_date, MONTH) AS month
+        SELECT pfc_detailed
         FROM silver.transactions
         WHERE transaction_id = @transaction_id
         LIMIT 1
@@ -75,19 +115,37 @@ async function lookup_adjustment_key(transaction_id: string) {
     const [rows] = await job.getQueryResults();
     if (rows.length === 0) return null;
 
-    const row = rows[0]
-    return {
-        account_id: row.account_id as string | null,
-        primary_category: row.primary_category as string | null,
-        detailed_category: row.detailed_category as string | null,
-        month: bigquery.date(row.month?.value ?? row.month),
-    }
+    return { pfc_detailed: rows[0].pfc_detailed as string | null }
+}
+
+// Runs a write plus the adjustment rebuild as one BigQuery transaction.
+async function run_with_adjustment_rebuild(
+    statement: string,
+    params: Record<string, string | null>,
+) {
+    const query = `
+        BEGIN TRANSACTION;
+        ${statement}
+        ${REBUILD_ADJUSTMENTS}
+        COMMIT TRANSACTION;
+    `;
+
+    const types = Object.fromEntries(Object.keys(params).map((k) => [k, 'STRING']));
+
+    const [job] = await bigquery.createQueryJob({
+        query,
+        location: 'US',
+        params,
+        types,
+    });
+    console.log(`Job ${job.id} started.`);
+    await job.getQueryResults();
 }
 
 async function set_transaction_ignored(transaction_id: string, ignored: boolean, uid: string | null) {
     try {
-        const key = await lookup_adjustment_key(transaction_id)
-        if (!key) return { found: false }
+        const txn = await lookup_transaction(transaction_id)
+        if (!txn) return { found: false }
 
         const toggle = ignored
             ? `
@@ -102,30 +160,7 @@ async function set_transaction_ignored(transaction_id: string, ignored: boolean,
                 DELETE FROM gold.ignored_transactions WHERE transaction_id = @transaction_id;
             `;
 
-        const query = `
-            BEGIN TRANSACTION;
-            ${toggle}
-            ${RECOMPUTE_ADJUSTMENT_KEY}
-            COMMIT TRANSACTION;
-        `;
-
-        const options = {
-            query,
-            location: 'US',
-            params: { transaction_id, uid, ...key },
-            types: {
-                transaction_id: 'STRING',
-                uid: 'STRING',
-                account_id: 'STRING',
-                primary_category: 'STRING',
-                detailed_category: 'STRING',
-                month: 'DATE',
-            },
-        };
-
-        const [job] = await bigquery.createQueryJob(options);
-        console.log(`Job ${job.id} started.`);
-        await job.getQueryResults();
+        await run_with_adjustment_rebuild(toggle, { transaction_id, uid })
         return { found: true }
     }
 
@@ -141,6 +176,43 @@ export async function ignore_transaction(transaction_id: string, uid: string | n
 
 export async function unignore_transaction(transaction_id: string) {
     return set_transaction_ignored(transaction_id, false, null)
+}
+
+// Tags a transaction with a primary category (or clears the tag when primary_category is
+// null). Credit card payments are excluded from gold and every list, so they can't be tagged.
+export async function set_transaction_category(transaction_id: string, primary_category: string | null, uid: string | null) {
+    try {
+        const txn = await lookup_transaction(transaction_id)
+        if (!txn) return { found: false, taggable: false }
+        if (txn.pfc_detailed === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT') return { found: true, taggable: false }
+
+        const statement = primary_category !== null
+            ? `
+                MERGE gold.transaction_categories AS target
+                USING (SELECT @transaction_id AS transaction_id) AS source
+                ON target.transaction_id = source.transaction_id
+                WHEN MATCHED THEN
+                    UPDATE SET primary_category = @primary_category, tagged_at = CURRENT_TIMESTAMP(), tagged_by = @uid
+                WHEN NOT MATCHED THEN
+                    INSERT (transaction_id, primary_category, tagged_at, tagged_by)
+                    VALUES (@transaction_id, @primary_category, CURRENT_TIMESTAMP(), @uid);
+            `
+            : `
+                DELETE FROM gold.transaction_categories WHERE transaction_id = @transaction_id;
+            `;
+
+        const params: Record<string, string | null> = primary_category !== null
+            ? { transaction_id, primary_category, uid }
+            : { transaction_id };
+
+        await run_with_adjustment_rebuild(statement, params)
+        return { found: true, taggable: true }
+    }
+
+    catch (error: unknown) {
+        console.error('BigQuery error:', error);
+        throw error;
+    }
 }
 
 export async function retrieve_accounts() {
@@ -281,8 +353,10 @@ export async function retrieve_transactions_primary_category_month(primary_categ
                 amount,
                 transaction_date,
                 pfc_primary,
+                original_pfc_primary,
+                is_tagged,
                 i.transaction_id IS NOT NULL AS is_ignored
-            FROM silver.transactions
+            FROM ${EFFECTIVE_TRANSACTIONS} AS t
             LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
             WHERE pfc_primary = @primary_category AND DATE_TRUNC(transaction_date, MONTH) = @month_year AND COALESCE(pfc_detailed, '') != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
               ${accountFilter}
@@ -324,8 +398,10 @@ export async function retrieve_recent_transactions(month_year: string, account_i
                 amount,
                 transaction_date,
                 pfc_primary,
+                original_pfc_primary,
+                is_tagged,
                 i.transaction_id IS NOT NULL AS is_ignored
-            FROM silver.transactions
+            FROM ${EFFECTIVE_TRANSACTIONS} AS t
             LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
             WHERE DATE_TRUNC(transaction_date, MONTH) = @month_year
               AND COALESCE(pfc_detailed, '') != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
@@ -396,8 +472,11 @@ export async function retrieve_transactions_account(account_id: string) {
                 amount,
                 transaction_date,
                 account_id,
+                pfc_primary,
+                original_pfc_primary,
+                is_tagged,
                 i.transaction_id IS NOT NULL AS is_ignored
-            FROM silver.transactions
+            FROM ${EFFECTIVE_TRANSACTIONS} AS t
             LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
             WHERE account_id = @account_id
         `;
@@ -454,7 +533,7 @@ export async function retrieve_primary_categories() {
     try {
         const query = `
             SELECT DISTINCT t.pfc_primary AS category, b.budget_limit AS \`limit\`
-            FROM silver.transactions t
+            FROM ${EFFECTIVE_TRANSACTIONS} t
             LEFT JOIN gold.budget_limits b
                 ON t.pfc_primary = b.primary_category
         `;
@@ -552,7 +631,6 @@ export async function retrieve_category_summaries(month_year: string, account_id
         for (const row of rows) {
             if (!isSpendingCategory(row.primary_category)) continue;
             const amt = Number(row.total_spending) || 0;
-            if (amt <= 0) continue;
 
             const cat = row.primary_category ?? 'UNCATEGORIZED';
             let entry = map.get(cat);
@@ -560,19 +638,21 @@ export async function retrieve_category_summaries(month_year: string, account_id
                 entry = { category: cat, spent: 0, budget: null, detailed: [] };
                 map.set(cat, entry);
             }
+            // Net across rows (a tagged reimbursement offsets spend in the same category);
+            // categories whose net isn't positive are dropped below.
             entry.spent += amt;
 
             const limit = Number(row.budget_limit) || 0;
             if (row.budget_limit !== null && limit > 0) entry.budget = limit;
 
-            if (row.detailed_category) {
+            if (amt > 0 && row.detailed_category) {
                 const existing = entry.detailed.find((d) => d.name === row.detailed_category);
                 if (existing) existing.spent += amt;
                 else entry.detailed.push({ name: row.detailed_category, spent: amt });
             }
         }
 
-        const summaries = [...map.values()].map((entry) => ({
+        const summaries = [...map.values()].filter((entry) => entry.spent > 0).map((entry) => ({
             ...entry,
             status: budgetStatus(entry.spent, entry.budget),
         }));
@@ -618,14 +698,24 @@ export async function retrieve_dashboard_overview(month_year: string, account_id
 
         const [rows] = await job.getQueryResults()
 
-        let totalSpent = 0
-        let prevSpent = 0
+        // Net per (category, month) first so a tagged reimbursement offsets spend in the
+        // same category, then count only categories whose net is positive.
+        const net = new Map<string, number>()
         for (const row of rows) {
             if (!isSpendingCategory(row.primary_category)) continue;
             const amt = Number(row.total_spending) || 0;
-            if (amt <= 0) continue;
             const raw = row.month?.value ?? row.month;
             const key = typeof raw === 'string' ? raw.slice(0, 7) : null;
+            if (key === null) continue;
+            const k = `${row.primary_category ?? ''}|${key}`
+            net.set(k, (net.get(k) ?? 0) + amt)
+        }
+
+        let totalSpent = 0
+        let prevSpent = 0
+        for (const [k, amt] of net) {
+            if (amt <= 0) continue;
+            const key = k.slice(k.lastIndexOf('|') + 1)
             if (key === month_year.slice(0, 7)) totalSpent += amt;
             else if (key === prevMonthKey) prevSpent += amt;
         }
@@ -667,7 +757,7 @@ export async function retrieve_spending_trends(grain: string, start_date: string
             SELECT
                 DATE_TRUNC(transaction_date, ${grain}) AS period,
                 SUM(amount) AS total
-            FROM silver.transactions AS t
+            FROM ${EFFECTIVE_TRANSACTIONS} AS t
             WHERE
                 (transaction_date >= @start_date OR @start_date IS NULL)
                 AND (@account_id = account_id OR @account_id IS NULL)

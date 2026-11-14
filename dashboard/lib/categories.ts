@@ -49,6 +49,13 @@ export function categoryMeta(raw: string | null): CategoryMeta {
   return CATEGORY_META[raw] ?? FALLBACK;
 }
 
+// Primary categories a transaction can be manually tagged with.
+export const TAGGABLE_CATEGORIES: string[] = Object.keys(CATEGORY_META);
+
+export function isTaggableCategory(raw: string): boolean {
+  return TAGGABLE_CATEGORIES.includes(raw);
+}
+
 export function isSpendingCategory(raw: string | null): boolean {
   return !categoryMeta(raw).inflow;
 }
