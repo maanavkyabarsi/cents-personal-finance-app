@@ -35,6 +35,7 @@ const EFFECTIVE_TRANSACTIONS = `(
         COALESCE(c.primary_category, t.pfc_primary) AS pfc_primary,
         IF(c.transaction_id IS NULL, t.pfc_detailed, NULL) AS pfc_detailed,
         t.pfc_primary AS original_pfc_primary,
+        t.pfc_detailed AS original_pfc_detailed,
         c.transaction_id IS NOT NULL AS is_tagged
     FROM silver.transactions AS t
     LEFT JOIN gold.transaction_categories AS c USING (transaction_id)
@@ -93,6 +94,16 @@ const REBUILD_ADJUSTMENTS = `
     ${ADJUSTMENT_ROWS_SQL};
 `
 
+// Logs wall-clock time for a BigQuery job so slow writes can be attributed.
+async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    const start = Date.now();
+    try {
+        return await fn();
+    } finally {
+        console.log(`[timing] ${label}: ${Date.now() - start}ms`);
+    }
+}
+
 // Looks up a transaction in silver, server-side, so the client only ever sends an ID.
 // Returns null if the transaction isn't in silver.
 async function lookup_transaction(transaction_id: string) {
@@ -109,59 +120,84 @@ async function lookup_transaction(transaction_id: string) {
         params: { transaction_id },
     };
 
-    const [job] = await bigquery.createQueryJob(options);
-    console.log(`Job ${job.id} started.`);
-
-    const [rows] = await job.getQueryResults();
+    const rows = await timed('lookup_transaction', async () => {
+        const [job] = await bigquery.createQueryJob(options);
+        const [r] = await job.getQueryResults();
+        return r;
+    });
     if (rows.length === 0) return null;
 
     return { pfc_detailed: rows[0].pfc_detailed as string | null }
 }
 
-// Runs a write plus the adjustment rebuild as one BigQuery transaction.
+// Runs a write plus the adjustment rebuild as one BigQuery job, and reports whether the
+// transaction exists and is taggable, so no separate lookup job is needed.
+//
+// The script looks the transaction up first into @found / @pfc. The statement passed in
+// must be guarded with `found` (and `taggable` where it applies) so it is a no-op for an
+// unknown transaction or a credit card payment. The rebuild then runs unconditionally
+// (it is idempotent) and a final SELECT returns the lookup result.
 async function run_with_adjustment_rebuild(
     statement: string,
     params: Record<string, string | null>,
-) {
+): Promise<{ found: boolean, pfc_detailed: string | null } | null> {
     const query = `
+        DECLARE found BOOL DEFAULT FALSE;
+        DECLARE pfc STRING;
+        DECLARE taggable BOOL DEFAULT FALSE;
+        SET (found, pfc) = (
+            SELECT AS STRUCT COUNT(*) > 0, ANY_VALUE(pfc_detailed)
+            FROM silver.transactions
+            WHERE transaction_id = @transaction_id
+        );
+        SET taggable = found AND COALESCE(pfc, '') != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT';
+
         BEGIN TRANSACTION;
         ${statement}
         ${REBUILD_ADJUSTMENTS}
         COMMIT TRANSACTION;
+
+        SELECT found AS found, pfc AS pfc_detailed;
     `;
 
     const types = Object.fromEntries(Object.keys(params).map((k) => [k, 'STRING']));
 
-    const [job] = await bigquery.createQueryJob({
-        query,
-        location: 'US',
-        params,
-        types,
+    const rows = await timed('run_with_adjustment_rebuild', async () => {
+        const [job] = await bigquery.createQueryJob({
+            query,
+            location: 'US',
+            params,
+            types,
+        });
+        const [r] = await job.getQueryResults();
+        return r;
     });
-    console.log(`Job ${job.id} started.`);
-    await job.getQueryResults();
+
+    // The parent job should return the final SELECT. If it didn't, the caller falls back
+    // to a separate lookup (the write itself is already guarded in SQL either way).
+    const row = rows[0]
+    if (!row || typeof row.found !== 'boolean') return null
+    return { found: row.found, pfc_detailed: (row.pfc_detailed as string | null) ?? null }
 }
 
 async function set_transaction_ignored(transaction_id: string, ignored: boolean, uid: string | null) {
     try {
-        const txn = await lookup_transaction(transaction_id)
-        if (!txn) return { found: false }
-
         const toggle = ignored
             ? `
                 INSERT INTO gold.ignored_transactions (transaction_id, ignored_at, ignored_by)
                 SELECT @transaction_id, CURRENT_TIMESTAMP(), @uid
                 FROM (SELECT 1)
-                WHERE NOT EXISTS (
+                WHERE found AND NOT EXISTS (
                     SELECT 1 FROM gold.ignored_transactions WHERE transaction_id = @transaction_id
                 );
             `
             : `
-                DELETE FROM gold.ignored_transactions WHERE transaction_id = @transaction_id;
+                DELETE FROM gold.ignored_transactions WHERE transaction_id = @transaction_id AND found;
             `;
 
-        await run_with_adjustment_rebuild(toggle, { transaction_id, uid })
-        return { found: true }
+        const result = await run_with_adjustment_rebuild(toggle, { transaction_id, uid })
+        if (result) return { found: result.found }
+        return { found: (await lookup_transaction(transaction_id)) !== null }
     }
 
     catch (error: unknown) {
@@ -182,14 +218,10 @@ export async function unignore_transaction(transaction_id: string) {
 // null). Credit card payments are excluded from gold and every list, so they can't be tagged.
 export async function set_transaction_category(transaction_id: string, primary_category: string | null, uid: string | null) {
     try {
-        const txn = await lookup_transaction(transaction_id)
-        if (!txn) return { found: false, taggable: false }
-        if (txn.pfc_detailed === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT') return { found: true, taggable: false }
-
         const statement = primary_category !== null
             ? `
                 MERGE gold.transaction_categories AS target
-                USING (SELECT @transaction_id AS transaction_id) AS source
+                USING (SELECT @transaction_id AS transaction_id FROM (SELECT 1) WHERE taggable) AS source
                 ON target.transaction_id = source.transaction_id
                 WHEN MATCHED THEN
                     UPDATE SET primary_category = @primary_category, tagged_at = CURRENT_TIMESTAMP(), tagged_by = @uid
@@ -198,14 +230,20 @@ export async function set_transaction_category(transaction_id: string, primary_c
                     VALUES (@transaction_id, @primary_category, CURRENT_TIMESTAMP(), @uid);
             `
             : `
-                DELETE FROM gold.transaction_categories WHERE transaction_id = @transaction_id;
+                DELETE FROM gold.transaction_categories WHERE transaction_id = @transaction_id AND found;
             `;
 
         const params: Record<string, string | null> = primary_category !== null
             ? { transaction_id, primary_category, uid }
             : { transaction_id };
 
-        await run_with_adjustment_rebuild(statement, params)
+        let txn = await run_with_adjustment_rebuild(statement, params)
+        if (!txn) {
+            const looked = await lookup_transaction(transaction_id)
+            txn = looked && { found: true, pfc_detailed: looked.pfc_detailed }
+        }
+        if (!txn || !txn.found) return { found: false, taggable: false }
+        if (txn.pfc_detailed === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT') return { found: true, taggable: false }
         return { found: true, taggable: true }
     }
 
@@ -294,9 +332,10 @@ export async function upsert_budget_limit(primary_category: string, budget_limit
             params: { primary_category, budget_limit }
         };
 
-        const [job] = await bigquery.createQueryJob(options);
-        console.log(`Job ${job.id} started.`);
-        await job.getQueryResults();
+        await timed('upsert_budget_limit', async () => {
+            const [job] = await bigquery.createQueryJob(options);
+            await job.getQueryResults();
+        });
         return { success: true }
 
     }
@@ -353,7 +392,9 @@ export async function retrieve_transactions_primary_category_month(primary_categ
                 amount,
                 transaction_date,
                 pfc_primary,
+                pfc_detailed,
                 original_pfc_primary,
+                original_pfc_detailed,
                 is_tagged,
                 i.transaction_id IS NOT NULL AS is_ignored
             FROM ${EFFECTIVE_TRANSACTIONS} AS t
@@ -398,7 +439,9 @@ export async function retrieve_recent_transactions(month_year: string, account_i
                 amount,
                 transaction_date,
                 pfc_primary,
+                pfc_detailed,
                 original_pfc_primary,
+                original_pfc_detailed,
                 is_tagged,
                 i.transaction_id IS NOT NULL AS is_ignored
             FROM ${EFFECTIVE_TRANSACTIONS} AS t
@@ -473,7 +516,9 @@ export async function retrieve_transactions_account(account_id: string) {
                 transaction_date,
                 account_id,
                 pfc_primary,
+                pfc_detailed,
                 original_pfc_primary,
+                original_pfc_detailed,
                 is_tagged,
                 i.transaction_id IS NOT NULL AS is_ignored
             FROM ${EFFECTIVE_TRANSACTIONS} AS t
@@ -736,6 +781,7 @@ export async function retrieve_dashboard_overview(month_year: string, account_id
             remaining: hasBudget ? budgetLimit - totalSpent : null,
             momDeltaPct,
             prevMonthKey: prevSpent > 0 ? prevMonthKey : null,
+            prevSpent,
             dailyPace,
             usedRatio,
             status: budgetStatus(totalSpent, hasBudget ? budgetLimit : null),

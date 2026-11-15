@@ -36,8 +36,8 @@ export function OverviewView({
   accountId: string | null;
   onOpenCategory: (category: string) => void;
   onViewAll: () => void;
-  onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
-  onTagCategory: (transactionId: string, category: string | null) => Promise<boolean>;
+  onToggleIgnore: (t: TransactionRow, ignore: boolean) => Promise<boolean>;
+  onTagCategory: (t: TransactionRow, category: string | null) => Promise<boolean>;
 }) {
   const totalSpent = overview?.totalSpent ?? 0;
   const hasBudget = overview?.budget != null && overview.budget > 0;

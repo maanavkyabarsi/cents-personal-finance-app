@@ -32,8 +32,8 @@ export function TransactionsDrawer({
   target: DrawerTarget | null;
   onClose: () => void;
   version: number;
-  onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
-  onTagCategory: (transactionId: string, category: string | null) => Promise<boolean>;
+  onToggleIgnore: (t: TransactionRow, ignore: boolean) => Promise<boolean>;
+  onTagCategory: (t: TransactionRow, category: string | null) => Promise<boolean>;
 }) {
   const [result, setResult] = useState<{ key: string; rows: TransactionRow[] } | null>(
     null
@@ -68,33 +68,41 @@ export function TransactionsDrawer({
 
   const toggle = async (t: TransactionRow) => {
     const ignore = !t.is_ignored;
+    const setIgnored = (value: boolean) =>
+      setResult((r) =>
+        r && {
+          ...r,
+          rows: r.rows.map((row) =>
+            row.transaction_id === t.transaction_id ? { ...row, is_ignored: value } : row
+          ),
+        }
+      );
     setPending((p) => new Set(p).add(t.transaction_id));
-    const ok = await onToggleIgnore(t.transaction_id, ignore);
+    setIgnored(ignore); // optimistic
+    const ok = await onToggleIgnore(t, ignore);
     setPending((p) => {
       const next = new Set(p);
       next.delete(t.transaction_id);
       return next;
     });
-    if (!ok) return;
-    setResult((r) =>
-      r && {
-        ...r,
-        rows: r.rows.map((row) =>
-          row.transaction_id === t.transaction_id ? { ...row, is_ignored: ignore } : row
-        ),
-      }
-    );
+    if (!ok) setIgnored(!ignore); // roll back
   };
 
-  // The refetch triggered by the version bump drops the row from this category's list.
+  // Optimistically drop the row (a tag change moves it out of this category's list);
+  // restore it if the request fails. The version-bump refetch reconciles on success.
   const tag = async (t: TransactionRow, category: string | null) => {
     setPending((p) => new Set(p).add(t.transaction_id));
-    await onTagCategory(t.transaction_id, category);
+    const snapshot = result;
+    setResult((r) =>
+      r && { ...r, rows: r.rows.filter((row) => row.transaction_id !== t.transaction_id) }
+    );
+    const ok = await onTagCategory(t, category);
     setPending((p) => {
       const next = new Set(p);
       next.delete(t.transaction_id);
       return next;
     });
+    if (!ok && snapshot) setResult(snapshot);
   };
 
   const rows = result && result.key === key ? result.rows : null;
