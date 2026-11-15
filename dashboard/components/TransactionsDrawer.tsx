@@ -15,6 +15,7 @@ import { CategoryIcon, Close, Inbox, Alert } from "./icons";
 import { Button, EmptyState, Skeleton } from "./primitives";
 import { authFetch } from "@/lib/authFetch";
 import { CategoryTagMenu, TaggedBadge } from "./CategoryTagMenu";
+import type { PendingWrites } from "@/lib/optimistic";
 
 export interface DrawerTarget {
   category: string;
@@ -26,14 +27,16 @@ export function TransactionsDrawer({
   target,
   onClose,
   version,
+  pending: pendingWrites,
   onToggleIgnore,
   onTagCategory,
 }: {
   target: DrawerTarget | null;
   onClose: () => void;
   version: number;
-  onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
-  onTagCategory: (transactionId: string, category: string | null) => Promise<boolean>;
+  pending: PendingWrites;
+  onToggleIgnore: (t: TransactionRow, ignore: boolean) => Promise<boolean>;
+  onTagCategory: (t: TransactionRow, category: string | null) => Promise<boolean>;
 }) {
   const [result, setResult] = useState<{ key: string; rows: TransactionRow[] } | null>(
     null
@@ -48,6 +51,7 @@ export function TransactionsDrawer({
   useEffect(() => {
     if (!target || !key) return;
     let cancelled = false;
+    const startedAt = Date.now();
     const url = `/api/transactions?primary_category=${encodeURIComponent(
       target.category
     )}&month_year=${target.month}${
@@ -58,43 +62,54 @@ export function TransactionsDrawer({
     authFetch(url)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: TransactionRow[]) => {
-        if (!cancelled) setResult({ key, rows: Array.isArray(data) ? data : [] });
+        if (cancelled) return;
+        const fetched = Array.isArray(data) ? data : [];
+        // Writes still settling in BigQuery are layered over the fetched list.
+        setResult({ key, rows: pendingWrites.overlayCategoryRows(fetched, target, startedAt) });
       })
       .catch(() => !cancelled && setErrorKey(key));
     return () => {
       cancelled = true;
     };
-  }, [key, target, version]);
+  }, [key, target, version, pendingWrites]);
 
   const toggle = async (t: TransactionRow) => {
     const ignore = !t.is_ignored;
+    const setIgnored = (value: boolean) =>
+      setResult((r) =>
+        r && {
+          ...r,
+          rows: r.rows.map((row) =>
+            row.transaction_id === t.transaction_id ? { ...row, is_ignored: value } : row
+          ),
+        }
+      );
     setPending((p) => new Set(p).add(t.transaction_id));
-    const ok = await onToggleIgnore(t.transaction_id, ignore);
+    setIgnored(ignore); // optimistic
+    const ok = await onToggleIgnore(t, ignore);
     setPending((p) => {
       const next = new Set(p);
       next.delete(t.transaction_id);
       return next;
     });
-    if (!ok) return;
-    setResult((r) =>
-      r && {
-        ...r,
-        rows: r.rows.map((row) =>
-          row.transaction_id === t.transaction_id ? { ...row, is_ignored: ignore } : row
-        ),
-      }
-    );
+    if (!ok) setIgnored(!ignore); // roll back
   };
 
-  // The refetch triggered by the version bump drops the row from this category's list.
+  // Optimistically drop the row (a tag change moves it out of this category's list);
+  // restore it if the request fails. The version-bump refetch reconciles on success.
   const tag = async (t: TransactionRow, category: string | null) => {
     setPending((p) => new Set(p).add(t.transaction_id));
-    await onTagCategory(t.transaction_id, category);
+    const snapshot = result;
+    setResult((r) =>
+      r && { ...r, rows: r.rows.filter((row) => row.transaction_id !== t.transaction_id) }
+    );
+    const ok = await onTagCategory(t, category);
     setPending((p) => {
       const next = new Set(p);
       next.delete(t.transaction_id);
       return next;
     });
+    if (!ok && snapshot) setResult(snapshot);
   };
 
   const rows = result && result.key === key ? result.rows : null;

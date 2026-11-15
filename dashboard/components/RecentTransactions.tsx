@@ -17,14 +17,14 @@ export function RecentTransactions({
   onTagCategory,
 }: {
   rows: TransactionRow[] | null;
-  onToggleIgnore: (transactionId: string, ignore: boolean) => Promise<boolean>;
-  onTagCategory: (transactionId: string, category: string | null) => Promise<boolean>;
+  onToggleIgnore: (t: TransactionRow, ignore: boolean) => Promise<boolean>;
+  onTagCategory: (t: TransactionRow, category: string | null) => Promise<boolean>;
 }) {
   const [pending, setPending] = useState<Set<string>>(new Set());
 
   const tag = async (t: TransactionRow, category: string | null) => {
     setPending((p) => new Set(p).add(t.transaction_id));
-    await onTagCategory(t.transaction_id, category);
+    await onTagCategory(t, category);
     setPending((p) => {
       const next = new Set(p);
       next.delete(t.transaction_id);
@@ -34,7 +34,7 @@ export function RecentTransactions({
 
   const toggle = async (t: TransactionRow) => {
     setPending((p) => new Set(p).add(t.transaction_id));
-    await onToggleIgnore(t.transaction_id, !t.is_ignored);
+    await onToggleIgnore(t, !t.is_ignored);
     setPending((p) => {
       const next = new Set(p);
       next.delete(t.transaction_id);

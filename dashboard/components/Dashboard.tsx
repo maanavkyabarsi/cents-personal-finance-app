@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { num, prettyCategory } from "@/lib/format";
 import type {
   Account,
@@ -20,6 +20,16 @@ import { OverviewView } from "./views/OverviewView";
 import { CategoriesView } from "./views/CategoriesView";
 import { BudgetsView } from "./views/BudgetsView";
 import { authFetch } from "@/lib/authFetch";
+import {
+  applySpendDeltas,
+  currentState,
+  overviewFromSummaries,
+  PendingWrites,
+  spendDeltas,
+  taggedState,
+  transactionMonth,
+  type SpendState,
+} from "@/lib/optimistic";
 import { useTheme } from "@/lib/useTheme";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
@@ -54,6 +64,11 @@ export function Dashboard() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   // Bumped after an ignore/unignore so totals and transaction lists refetch.
   const [dataVersion, setDataVersion] = useState(0);
+  // Mirror of `summaries` so optimistic updates can compute from the latest value
+  // without depending on a stale closure.
+  const summariesRef = useRef<CategorySummary[]>([]);
+  // Writes that may not be visible to fetches yet; layered over fetched data.
+  const [pending] = useState(() => new PendingWrites());
 
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setRefreshing(true);
@@ -153,22 +168,36 @@ export function Dashboard() {
   useEffect(() => {
     if (!effectiveMonth) return;
     let cancelled = false;
+    const startedAt = Date.now();
     const params = new URLSearchParams({ month: effectiveMonth });
     if (accountId) params.set("account_id", accountId);
 
     authFetch(`/api/categories?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: CategorySummary[]) => {
-        if (!cancelled) setSummaries(Array.isArray(data) ? data : []);
+        if (cancelled) return;
+        const fetched = Array.isArray(data) ? data : [];
+        const next = pending.overlaySummaries(fetched, budgets, effectiveMonth, accountId, startedAt);
+        summariesRef.current = next;
+        setSummaries(next);
+        if (next !== fetched) setOverview((o) => (o ? overviewFromSummaries(o, next) : o));
       })
       .catch(() => {
-        if (!cancelled) setSummaries([]);
+        if (cancelled) return;
+        summariesRef.current = [];
+        setSummaries([]);
       });
 
     authFetch(`/api/dashboard/overview?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: DashboardOverview) => {
-        if (!cancelled) setOverview(data);
+        if (cancelled) return;
+        // Totals follow the (already overlaid) category list while writes are settling.
+        setOverview(
+          pending.hasRelevant(startedAt)
+            ? overviewFromSummaries(data, summariesRef.current)
+            : data
+        );
       })
       .catch(() => {
         if (!cancelled) setOverview(null);
@@ -177,7 +206,9 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveMonth, accountId, summaryKey, dataVersion]);
+    // budgets is read only to attach limits to categories created by an overlay.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveMonth, accountId, summaryKey, dataVersion, pending]);
 
   const spentByCategory = useMemo(() => {
     const m = new Map<string, number>();
@@ -190,6 +221,7 @@ export function Dashboard() {
   useEffect(() => {
     if (!effectiveMonth) return;
     let cancelled = false;
+    const startedAt = Date.now();
     const url = `/api/transactions/recent?month_year=${effectiveMonth}${
       accountId ? `&account_id=${encodeURIComponent(accountId)}` : ""
     }`;
@@ -197,7 +229,10 @@ export function Dashboard() {
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: TransactionRow[]) => {
         if (!cancelled)
-          setRecent({ key: recentKey, rows: Array.isArray(data) ? data : [] });
+          setRecent({
+            key: recentKey,
+            rows: pending.overlayRows(Array.isArray(data) ? data : [], startedAt),
+          });
       })
       .catch(() => {
         if (!cancelled) setRecent({ key: recentKey, rows: [] });
@@ -205,12 +240,23 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveMonth, accountId, recentKey, dataVersion]);
+  }, [effectiveMonth, accountId, recentKey, dataVersion, pending]);
 
   const recentRows = recent && recent.key === recentKey ? recent.rows : null;
 
   const handleSave = useCallback(
     async (category: string, limit: number, _isNew: boolean) => {
+      setBudgets((prev) => {
+        const next = new Map(prev);
+        if (limit > 0) next.set(category, limit);
+        else next.delete(category);
+        return next;
+      });
+      setToast({
+        id: Date.now(),
+        message: `${prettyLabel(category)} budget saved`,
+        tone: "success",
+      });
       try {
         const res = await authFetch("/api/budget/limits", {
           method: "POST",
@@ -221,14 +267,12 @@ export function Dashboard() {
           }),
         });
         if (!res.ok) throw new Error();
-        await loadCategoryBudgets();
-        setToast({
-          id: Date.now(),
-          message: `${prettyLabel(category)} budget saved`,
-          tone: "success",
-        });
+        // Local state was already updated optimistically; reconcile in the background.
+        void loadCategoryBudgets();
         return true;
       } catch {
+        // Roll back to whatever the server has.
+        void loadCategoryBudgets();
         setToast({
           id: Date.now(),
           message: "Couldn't save budget",
@@ -242,6 +286,12 @@ export function Dashboard() {
 
   const handleSaveOverall = useCallback(
     async (limit: number, _isNew: boolean) => {
+      setOverallBudget(limit > 0 ? limit : null);
+      setToast({
+        id: Date.now(),
+        message: "Monthly budget saved",
+        tone: "success",
+      });
       try {
         const res = await authFetch("/api/budget/overall", {
           method: "POST",
@@ -249,15 +299,10 @@ export function Dashboard() {
           body: JSON.stringify({ budget_limit: limit }),
         });
         if (!res.ok) throw new Error();
-        setOverallBudget(limit > 0 ? limit : null);
-        await loadOverall();
-        setToast({
-          id: Date.now(),
-          message: "Monthly budget saved",
-          tone: "success",
-        });
+        void loadOverall();
         return true;
       } catch {
+        void loadOverall();
         setToast({
           id: Date.now(),
           message: "Couldn't save monthly budget",
@@ -269,8 +314,39 @@ export function Dashboard() {
     [loadOverall]
   );
 
+  // Reflects a pending ignore/tag in the recent list, category totals and overview right
+  // away. A failed write bumps dataVersion, which refetches the real numbers.
+  const applyOptimistic = useCallback(
+    (t: TransactionRow, after: SpendState, rowPatch: Partial<TransactionRow>) => {
+      pending.begin(t, { ...t, ...rowPatch }, after, accountId);
+      setRecent((prev) =>
+        prev && {
+          ...prev,
+          rows: prev.rows.map((r) =>
+            r.transaction_id === t.transaction_id ? { ...r, ...rowPatch } : r
+          ),
+        }
+      );
+      if (!effectiveMonth || transactionMonth(t) !== effectiveMonth.slice(0, 7)) return;
+      const deltas = spendDeltas(t, after);
+      if (deltas.length === 0) return;
+      const next = applySpendDeltas(summariesRef.current, budgets, deltas);
+      summariesRef.current = next;
+      setSummaries(next);
+      setOverview((o) => (o ? overviewFromSummaries(o, next) : o));
+    },
+    [effectiveMonth, budgets, pending, accountId]
+  );
+
   const handleToggleIgnore = useCallback(
-    async (transactionId: string, ignore: boolean) => {
+    async (t: TransactionRow, ignore: boolean) => {
+      const transactionId = t.transaction_id;
+      applyOptimistic(t, { ...currentState(t), ignored: ignore }, { is_ignored: ignore });
+      setToast({
+        id: Date.now(),
+        message: ignore ? "Transaction ignored" : "Transaction restored",
+        tone: "success",
+      });
       try {
         const res = await authFetch("/api/transactions/ignore", {
           method: ignore ? "POST" : "DELETE",
@@ -278,14 +354,13 @@ export function Dashboard() {
           body: JSON.stringify({ transaction_id: transactionId }),
         });
         if (!res.ok) throw new Error();
+        // Totals/lists refetch once BigQuery has the write.
+        pending.finish(transactionId);
         setDataVersion((v) => v + 1);
-        setToast({
-          id: Date.now(),
-          message: ignore ? "Transaction ignored" : "Transaction restored",
-          tone: "success",
-        });
         return true;
       } catch {
+        pending.fail(transactionId);
+        setDataVersion((v) => v + 1); // undo the optimistic update
         setToast({
           id: Date.now(),
           message: ignore ? "Couldn't ignore transaction" : "Couldn't restore transaction",
@@ -294,11 +369,23 @@ export function Dashboard() {
         return false;
       }
     },
-    []
+    [applyOptimistic, pending]
   );
 
   const handleTagCategory = useCallback(
-    async (transactionId: string, category: string | null) => {
+    async (t: TransactionRow, category: string | null) => {
+      const transactionId = t.transaction_id;
+      const after = taggedState(t, category);
+      applyOptimistic(t, after, {
+        pfc_primary: after.category,
+        pfc_detailed: after.detailed,
+        is_tagged: category !== null,
+      });
+      setToast({
+        id: Date.now(),
+        message: category ? `Tagged as ${prettyCategory(category)}` : "Tag removed",
+        tone: "success",
+      });
       try {
         const res = await authFetch("/api/transactions/category", {
           method: category ? "POST" : "DELETE",
@@ -310,16 +397,12 @@ export function Dashboard() {
           ),
         });
         if (!res.ok) throw new Error();
+        pending.finish(transactionId);
         setDataVersion((v) => v + 1);
-        setToast({
-          id: Date.now(),
-          message: category
-            ? `Tagged as ${prettyCategory(category)}`
-            : "Tag removed",
-          tone: "success",
-        });
         return true;
       } catch {
+        pending.fail(transactionId);
+        setDataVersion((v) => v + 1); // undo the optimistic update
         setToast({
           id: Date.now(),
           message: category ? "Couldn't tag transaction" : "Couldn't remove tag",
@@ -328,7 +411,7 @@ export function Dashboard() {
         return false;
       }
     },
-    []
+    [applyOptimistic, pending]
   );
 
   const overallSpent = overview?.totalSpent ?? 0;
@@ -431,6 +514,7 @@ export function Dashboard() {
         target={drawer}
         onClose={() => setDrawer(null)}
         version={dataVersion}
+        pending={pending}
         onToggleIgnore={handleToggleIgnore}
         onTagCategory={handleTagCategory}
       />

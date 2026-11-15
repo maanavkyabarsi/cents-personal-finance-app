@@ -23,6 +23,7 @@ export interface TransactionRow {
   pfc_primary?: string | null;
   pfc_detailed?: string | null;
   original_pfc_primary?: string | null;
+  original_pfc_detailed?: string | null;
   is_tagged?: boolean;
 }
 
@@ -46,6 +47,7 @@ export interface DashboardOverview {
   remaining: number | null;
   momDeltaPct: number | null;
   prevMonthKey: string | null;
+  prevSpent: number;
   dailyPace: number;
   usedRatio: number;
   status: BudgetStatus;
