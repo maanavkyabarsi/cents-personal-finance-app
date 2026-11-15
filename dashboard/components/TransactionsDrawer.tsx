@@ -15,6 +15,7 @@ import { CategoryIcon, Close, Inbox, Alert } from "./icons";
 import { Button, EmptyState, Skeleton } from "./primitives";
 import { authFetch } from "@/lib/authFetch";
 import { CategoryTagMenu, TaggedBadge } from "./CategoryTagMenu";
+import type { PendingWrites } from "@/lib/optimistic";
 
 export interface DrawerTarget {
   category: string;
@@ -26,12 +27,14 @@ export function TransactionsDrawer({
   target,
   onClose,
   version,
+  pending: pendingWrites,
   onToggleIgnore,
   onTagCategory,
 }: {
   target: DrawerTarget | null;
   onClose: () => void;
   version: number;
+  pending: PendingWrites;
   onToggleIgnore: (t: TransactionRow, ignore: boolean) => Promise<boolean>;
   onTagCategory: (t: TransactionRow, category: string | null) => Promise<boolean>;
 }) {
@@ -48,6 +51,7 @@ export function TransactionsDrawer({
   useEffect(() => {
     if (!target || !key) return;
     let cancelled = false;
+    const startedAt = Date.now();
     const url = `/api/transactions?primary_category=${encodeURIComponent(
       target.category
     )}&month_year=${target.month}${
@@ -58,13 +62,16 @@ export function TransactionsDrawer({
     authFetch(url)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: TransactionRow[]) => {
-        if (!cancelled) setResult({ key, rows: Array.isArray(data) ? data : [] });
+        if (cancelled) return;
+        const fetched = Array.isArray(data) ? data : [];
+        // Writes still settling in BigQuery are layered over the fetched list.
+        setResult({ key, rows: pendingWrites.overlayCategoryRows(fetched, target, startedAt) });
       })
       .catch(() => !cancelled && setErrorKey(key));
     return () => {
       cancelled = true;
     };
-  }, [key, target, version]);
+  }, [key, target, version, pendingWrites]);
 
   const toggle = async (t: TransactionRow) => {
     const ignore = !t.is_ignored;

@@ -114,3 +114,107 @@ export function overviewFromSummaries(
     status: budgetStatus(totalSpent, hasBudget ? o.budget : null),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Pending writes
+//
+// A write takes a few seconds to land in BigQuery. Any list or total fetched during that
+// window comes back without it, so reopening a drawer or switching month would briefly show
+// the old state. PendingWrites remembers each write and layers it back over such results.
+// A fetch that started after a write finished already sees it, so only fetches that began
+// before `doneAt` (or while the write is still running) are patched.
+
+interface PendingWrite {
+  original: TransactionRow; // state before the first write in this window
+  patched: TransactionRow; // state after the latest write
+  after: SpendState;
+  accountId: string | null; // account filter the row was seen under
+  doneAt: number | null; // null while the request is in flight
+}
+
+const KEEP_MS = 60_000;
+
+export class PendingWrites {
+  private entries = new Map<string, PendingWrite>();
+
+  begin(original: TransactionRow, patched: TransactionRow, after: SpendState, accountId: string | null) {
+    const prev = this.entries.get(original.transaction_id);
+    const stillOpen = prev !== undefined && prev.doneAt === null;
+    this.entries.set(original.transaction_id, {
+      original: stillOpen ? prev.original : original,
+      patched,
+      after,
+      accountId,
+      doneAt: null,
+    });
+  }
+
+  finish(id: string) {
+    const e = this.entries.get(id);
+    if (e) e.doneAt = Date.now();
+  }
+
+  fail(id: string) {
+    this.entries.delete(id);
+  }
+
+  private relevant(startedAt: number): PendingWrite[] {
+    const now = Date.now();
+    const out: PendingWrite[] = [];
+    for (const [id, e] of this.entries) {
+      if (e.doneAt !== null && now - e.doneAt > KEEP_MS) this.entries.delete(id);
+      else if (e.doneAt === null || e.doneAt >= startedAt) out.push(e);
+    }
+    return out;
+  }
+
+  hasRelevant(startedAt: number) {
+    return this.relevant(startedAt).length > 0;
+  }
+
+  // Rows for one category + month (the drawer). Drops rows that moved elsewhere, adds rows
+  // that moved in, and updates rows whose ignored/tag state changed.
+  overlayCategoryRows(
+    rows: TransactionRow[],
+    target: { category: string; month: string; accountId: string | null },
+    startedAt: number
+  ): TransactionRow[] {
+    const writes = this.relevant(startedAt);
+    if (writes.length === 0) return rows;
+    const byId = new Map(rows.map((r) => [r.transaction_id, r]));
+    for (const w of writes) {
+      if (transactionMonth(w.patched) !== target.month.slice(0, 7)) continue;
+      const belongs =
+        w.patched.pfc_primary === target.category &&
+        (target.accountId === null || target.accountId === w.accountId);
+      if (belongs) byId.set(w.patched.transaction_id, w.patched);
+      else byId.delete(w.patched.transaction_id);
+    }
+    return [...byId.values()];
+  }
+
+  // The recent list only shows rows that already exist, so just update them in place.
+  overlayRows(rows: TransactionRow[], startedAt: number): TransactionRow[] {
+    const writes = this.relevant(startedAt);
+    if (writes.length === 0) return rows;
+    const byId = new Map(writes.map((w) => [w.patched.transaction_id, w.patched]));
+    return rows.map((r) => byId.get(r.transaction_id) ?? r);
+  }
+
+  overlaySummaries(
+    summaries: CategorySummary[],
+    budgets: Map<string, number>,
+    month: string,
+    accountId: string | null,
+    startedAt: number
+  ): CategorySummary[] {
+    const deltas = this.relevant(startedAt)
+      .filter(
+        (w) =>
+          transactionMonth(w.original) === month.slice(0, 7) &&
+          (accountId === null || accountId === w.accountId)
+      )
+      .flatMap((w) => spendDeltas(w.original, w.after));
+    return deltas.length ? applySpendDeltas(summaries, budgets, deltas) : summaries;
+  }
+}

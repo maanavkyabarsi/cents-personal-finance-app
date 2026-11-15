@@ -24,6 +24,7 @@ import {
   applySpendDeltas,
   currentState,
   overviewFromSummaries,
+  PendingWrites,
   spendDeltas,
   taggedState,
   transactionMonth,
@@ -66,6 +67,8 @@ export function Dashboard() {
   // Mirror of `summaries` so optimistic updates can compute from the latest value
   // without depending on a stale closure.
   const summariesRef = useRef<CategorySummary[]>([]);
+  // Writes that may not be visible to fetches yet; layered over fetched data.
+  const [pending] = useState(() => new PendingWrites());
 
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setRefreshing(true);
@@ -165,6 +168,7 @@ export function Dashboard() {
   useEffect(() => {
     if (!effectiveMonth) return;
     let cancelled = false;
+    const startedAt = Date.now();
     const params = new URLSearchParams({ month: effectiveMonth });
     if (accountId) params.set("account_id", accountId);
 
@@ -172,9 +176,11 @@ export function Dashboard() {
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: CategorySummary[]) => {
         if (cancelled) return;
-        const next = Array.isArray(data) ? data : [];
+        const fetched = Array.isArray(data) ? data : [];
+        const next = pending.overlaySummaries(fetched, budgets, effectiveMonth, accountId, startedAt);
         summariesRef.current = next;
         setSummaries(next);
+        if (next !== fetched) setOverview((o) => (o ? overviewFromSummaries(o, next) : o));
       })
       .catch(() => {
         if (cancelled) return;
@@ -185,7 +191,13 @@ export function Dashboard() {
     authFetch(`/api/dashboard/overview?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: DashboardOverview) => {
-        if (!cancelled) setOverview(data);
+        if (cancelled) return;
+        // Totals follow the (already overlaid) category list while writes are settling.
+        setOverview(
+          pending.hasRelevant(startedAt)
+            ? overviewFromSummaries(data, summariesRef.current)
+            : data
+        );
       })
       .catch(() => {
         if (!cancelled) setOverview(null);
@@ -194,7 +206,9 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveMonth, accountId, summaryKey, dataVersion]);
+    // budgets is read only to attach limits to categories created by an overlay.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveMonth, accountId, summaryKey, dataVersion, pending]);
 
   const spentByCategory = useMemo(() => {
     const m = new Map<string, number>();
@@ -207,6 +221,7 @@ export function Dashboard() {
   useEffect(() => {
     if (!effectiveMonth) return;
     let cancelled = false;
+    const startedAt = Date.now();
     const url = `/api/transactions/recent?month_year=${effectiveMonth}${
       accountId ? `&account_id=${encodeURIComponent(accountId)}` : ""
     }`;
@@ -214,7 +229,10 @@ export function Dashboard() {
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((data: TransactionRow[]) => {
         if (!cancelled)
-          setRecent({ key: recentKey, rows: Array.isArray(data) ? data : [] });
+          setRecent({
+            key: recentKey,
+            rows: pending.overlayRows(Array.isArray(data) ? data : [], startedAt),
+          });
       })
       .catch(() => {
         if (!cancelled) setRecent({ key: recentKey, rows: [] });
@@ -222,7 +240,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveMonth, accountId, recentKey, dataVersion]);
+  }, [effectiveMonth, accountId, recentKey, dataVersion, pending]);
 
   const recentRows = recent && recent.key === recentKey ? recent.rows : null;
 
@@ -300,6 +318,7 @@ export function Dashboard() {
   // away. A failed write bumps dataVersion, which refetches the real numbers.
   const applyOptimistic = useCallback(
     (t: TransactionRow, after: SpendState, rowPatch: Partial<TransactionRow>) => {
+      pending.begin(t, { ...t, ...rowPatch }, after, accountId);
       setRecent((prev) =>
         prev && {
           ...prev,
@@ -316,7 +335,7 @@ export function Dashboard() {
       setSummaries(next);
       setOverview((o) => (o ? overviewFromSummaries(o, next) : o));
     },
-    [effectiveMonth, budgets]
+    [effectiveMonth, budgets, pending, accountId]
   );
 
   const handleToggleIgnore = useCallback(
@@ -336,9 +355,11 @@ export function Dashboard() {
         });
         if (!res.ok) throw new Error();
         // Totals/lists refetch once BigQuery has the write.
+        pending.finish(transactionId);
         setDataVersion((v) => v + 1);
         return true;
       } catch {
+        pending.fail(transactionId);
         setDataVersion((v) => v + 1); // undo the optimistic update
         setToast({
           id: Date.now(),
@@ -348,7 +369,7 @@ export function Dashboard() {
         return false;
       }
     },
-    [applyOptimistic]
+    [applyOptimistic, pending]
   );
 
   const handleTagCategory = useCallback(
@@ -376,9 +397,11 @@ export function Dashboard() {
           ),
         });
         if (!res.ok) throw new Error();
+        pending.finish(transactionId);
         setDataVersion((v) => v + 1);
         return true;
       } catch {
+        pending.fail(transactionId);
         setDataVersion((v) => v + 1); // undo the optimistic update
         setToast({
           id: Date.now(),
@@ -388,7 +411,7 @@ export function Dashboard() {
         return false;
       }
     },
-    [applyOptimistic]
+    [applyOptimistic, pending]
   );
 
   const overallSpent = overview?.totalSpent ?? 0;
@@ -491,6 +514,7 @@ export function Dashboard() {
         target={drawer}
         onClose={() => setDrawer(null)}
         version={dataVersion}
+        pending={pending}
         onToggleIgnore={handleToggleIgnore}
         onTagCategory={handleTagCategory}
       />
