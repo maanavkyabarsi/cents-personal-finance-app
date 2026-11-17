@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { currencyCents, dateStr, dayLabel, num, prettyCategory } from "@/lib/format";
-import type { TransactionRow } from "@/lib/types";
+import type { EventRecord, TransactionRow } from "@/lib/types";
+import { inSeparateEvent } from "@/lib/optimistic";
 import { Inbox } from "./icons";
 import { Skeleton } from "./primitives";
 import { CategoryTagMenu, TaggedBadge } from "./CategoryTagMenu";
+import { EventBadge, EventMoveMenu } from "./EventControls";
 
 function txnTitle(t: TransactionRow): string {
   return t.merchant_name || t.transaction_name || "Transaction";
@@ -15,16 +17,30 @@ export function RecentTransactions({
   rows,
   onToggleIgnore,
   onTagCategory,
+  events,
+  onMoveToEvent,
 }: {
   rows: TransactionRow[] | null;
   onToggleIgnore: (t: TransactionRow, ignore: boolean) => Promise<boolean>;
   onTagCategory: (t: TransactionRow, category: string | null) => Promise<boolean>;
+  events: EventRecord[];
+  onMoveToEvent: (t: TransactionRow, eventId: string | null) => Promise<boolean>;
 }) {
   const [pending, setPending] = useState<Set<string>>(new Set());
 
   const tag = async (t: TransactionRow, category: string | null) => {
     setPending((p) => new Set(p).add(t.transaction_id));
     await onTagCategory(t, category);
+    setPending((p) => {
+      const next = new Set(p);
+      next.delete(t.transaction_id);
+      return next;
+    });
+  };
+
+  const move = async (t: TransactionRow, eventId: string | null) => {
+    setPending((p) => new Set(p).add(t.transaction_id));
+    await onMoveToEvent(t, eventId);
     setPending((p) => {
       const next = new Set(p);
       next.delete(t.transaction_id);
@@ -86,6 +102,8 @@ export function RecentTransactions({
         const title = txnTitle(t);
         const amt = num(t.amount);
         const refund = amt < 0;
+        // Ignored rows and rows in a separate event don't count toward totals.
+        const dimmed = t.is_ignored || inSeparateEvent(t);
         return (
           <div
             key={t.transaction_id}
@@ -93,17 +111,18 @@ export function RecentTransactions({
           >
             <span
               className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-surface-2 text-[13px] font-semibold text-primary ${
-                t.is_ignored ? "opacity-50" : ""
+                dimmed ? "opacity-50" : ""
               }`}
               aria-hidden
             >
               {title.charAt(0).toUpperCase()}
             </span>
-            <div className={`min-w-0 flex-1 ${t.is_ignored ? "opacity-50" : ""}`}>
+            <div className={`min-w-0 flex-1 ${dimmed ? "opacity-50" : ""}`}>
               <p className="truncate text-[13px] font-medium text-text">{title}</p>
               <p className="truncate text-[11.5px] text-subtle">
                 {prettyCategory(t.pfc_primary ?? null)}
                 {t.is_tagged && <TaggedBadge original={t.original_pfc_primary} />}
+                {t.event_id && <EventBadge name={t.event_name} counted={t.event_counted} />}
               </p>
             </div>
             <span className="w-[52px] shrink-0 text-[11.5px] text-subtle">
@@ -123,6 +142,14 @@ export function RecentTransactions({
               label={`Tag category for ${title}`}
               onSelect={(c) => tag(t, c)}
               className="max-w-[64px] text-[11.5px]"
+            />
+            <EventMoveMenu
+              events={events}
+              currentEventId={t.event_id}
+              disabled={pending.has(t.transaction_id)}
+              label={`Move ${title} to an event`}
+              onSelect={(id) => move(t, id)}
+              className="max-w-[56px] text-[11.5px]"
             />
             <button
               type="button"

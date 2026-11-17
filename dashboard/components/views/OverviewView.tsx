@@ -16,6 +16,7 @@ import { Alert, ChartPie } from "../icons";
 import { Card, EmptyState, cx } from "../primitives";
 import { Donut } from "../Donut";
 import { RecentTransactions } from "../RecentTransactions";
+import type { EventRecord } from "@/lib/types";
 import { SpendingTrends } from "../SpendingTrends";
 
 export function OverviewView({
@@ -28,6 +29,8 @@ export function OverviewView({
   onViewAll,
   onToggleIgnore,
   onTagCategory,
+  events,
+  onMoveToEvent,
 }: {
   month: string;
   summaries: CategorySummary[];
@@ -38,6 +41,8 @@ export function OverviewView({
   onViewAll: () => void;
   onToggleIgnore: (t: TransactionRow, ignore: boolean) => Promise<boolean>;
   onTagCategory: (t: TransactionRow, category: string | null) => Promise<boolean>;
+  events: EventRecord[];
+  onMoveToEvent: (t: TransactionRow, eventId: string | null) => Promise<boolean>;
 }) {
   const totalSpent = overview?.totalSpent ?? 0;
   const hasBudget = overview?.budget != null && overview.budget > 0;
@@ -171,6 +176,8 @@ export function OverviewView({
             rows={recent}
             onToggleIgnore={onToggleIgnore}
             onTagCategory={onTagCategory}
+            events={events}
+            onMoveToEvent={onMoveToEvent}
           />
 
           <div className="mt-5">

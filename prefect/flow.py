@@ -87,7 +87,9 @@ def ensure_tables():
 # subtract: ignored/tagged transactions are subtracted at their original key, and tagged,
 # non-ignored ones are added (negative adjustment) at the tagged category. The pfc_detailed
 # filter must match dbt/models/gold/gold_spending_by_category.sql exactly (including
-# dropping NULLs), as must ADJUSTMENT_ROWS_SQL in dashboard/lib/queries.ts.
+# dropping NULLs), as must ADJUSTMENT_ROWS_SQL in dashboard/lib/queries.ts. Transactions
+# in an event with count_in_totals = FALSE are treated like ignored ones (subtracted, and
+# not re-added at a tagged category); "counted" events don't affect the ledger.
 @prefect.task
 def rebuild_spending_adjustments():
     bq_client = bigquery.Client()
@@ -111,6 +113,7 @@ def rebuild_spending_adjustments():
                 AND (
                     EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
                     OR EXISTS (SELECT 1 FROM gold.transaction_categories AS c WHERE c.transaction_id = t.transaction_id)
+                    OR EXISTS (SELECT 1 FROM gold.event_transactions AS ev WHERE ev.transaction_id = t.transaction_id AND NOT ev.count_in_totals)
                 )
 
             UNION ALL
@@ -125,6 +128,7 @@ def rebuild_spending_adjustments():
             JOIN gold.transaction_categories AS c USING (transaction_id)
             WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
                 AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
+                AND NOT EXISTS (SELECT 1 FROM gold.event_transactions AS ev WHERE ev.transaction_id = t.transaction_id AND NOT ev.count_in_totals)
         )
         GROUP BY 1, 2, 3, 4;
     """
