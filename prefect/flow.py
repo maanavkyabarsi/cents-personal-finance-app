@@ -38,15 +38,11 @@ def run_dbt():
     if result.returncode != 0:
         raise Exception(f"dbt run failed:\n{result.stderr}")
 
-# The dashboard rebuilds gold.spending_adjustments when a transaction is ignored or
-# manually tagged; this rebuilds it against the freshly built silver so Plaid
-# modifications, recategorizations and removals are reflected. adjustment is an amount to
-# subtract: ignored/tagged transactions are subtracted at their original key, and tagged,
-# non-ignored ones are added (negative adjustment) at the tagged category. The pfc_detailed
-# filter must match dbt/models/gold/gold_spending_by_category.sql exactly (including
-# dropping NULLs), as must ADJUSTMENT_ROWS_SQL in dashboard/lib/queries.ts.
+# Creates the tables the dashboard writes to, if missing. Runs before dbt because the
+# gold_event_transactions view reads gold.events and gold.event_overrides as sources.
+# Schemas must match README step 2d.
 @prefect.task
-def rebuild_spending_adjustments():
+def ensure_tables():
     bq_client = bigquery.Client()
     query = """
         CREATE TABLE IF NOT EXISTS gold.ignored_transactions (
@@ -62,6 +58,40 @@ def rebuild_spending_adjustments():
             tagged_by STRING
         );
 
+        CREATE TABLE IF NOT EXISTS gold.events (
+            event_id STRING NOT NULL,
+            name STRING NOT NULL,
+            start_date DATE NOT NULL,
+            end_date DATE,
+            account_ids ARRAY<STRING>,
+            count_in_totals BOOL NOT NULL,
+            created_at TIMESTAMP,
+            created_by STRING,
+            ended_at TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS gold.event_overrides (
+            transaction_id STRING NOT NULL,
+            event_id STRING,
+            mode STRING NOT NULL,
+            updated_at TIMESTAMP,
+            updated_by STRING
+        );
+    """
+    bq_client.query(query, location="US").result()
+    print("Ensured dashboard tables exist")
+
+# The dashboard rebuilds gold.spending_adjustments when a transaction is ignored or
+# manually tagged; this rebuilds it against the freshly built silver so Plaid
+# modifications, recategorizations and removals are reflected. adjustment is an amount to
+# subtract: ignored/tagged transactions are subtracted at their original key, and tagged,
+# non-ignored ones are added (negative adjustment) at the tagged category. The pfc_detailed
+# filter must match dbt/models/gold/gold_spending_by_category.sql exactly (including
+# dropping NULLs), as must ADJUSTMENT_ROWS_SQL in dashboard/lib/queries.ts.
+@prefect.task
+def rebuild_spending_adjustments():
+    bq_client = bigquery.Client()
+    query = """
         CREATE OR REPLACE TABLE gold.spending_adjustments AS
         SELECT
             account_id,
@@ -121,6 +151,7 @@ def daily_sync():
     for item_id in item_ids:
         sync_and_store(item_id)
     sync_accounts()
+    ensure_tables()
     run_dbt()
     rebuild_spending_adjustments()
 

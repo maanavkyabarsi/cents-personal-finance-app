@@ -12,6 +12,9 @@ SELECT
     JSON_VALUE(raw_data, '$.account_id') AS account_id,
     CAST(JSON_VALUE(raw_data, '$.amount') AS FLOAT64) AS amount,
     CAST(JSON_VALUE(raw_data, '$.date') AS DATE) AS transaction_date,
+    -- When the purchase was made (Plaid's `date` is often the later posting date). NULL
+    -- for some institutions and older rows; use COALESCE(authorized_date, transaction_date).
+    SAFE_CAST(JSON_VALUE(raw_data, '$.authorized_date') AS DATE) AS authorized_date,
     JSON_VALUE(raw_data, '$.category') AS category,
     JSON_VALUE(raw_data, '$.category_id') AS category_id,
     JSON_VALUE(raw_data, '$.counterparties[0].name') AS counterparties_name,
