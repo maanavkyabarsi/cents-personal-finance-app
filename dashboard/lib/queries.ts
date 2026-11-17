@@ -29,7 +29,7 @@ const ADJUSTED_SPENDING = `(
 // silver.transactions with manual category tags applied. pfc_primary is the effective
 // category; a tagged transaction has no detailed category. The original primary category
 // is kept in original_pfc_primary. Alias it (AS t) where used.
-const EFFECTIVE_TRANSACTIONS = `(
+export const EFFECTIVE_TRANSACTIONS = `(
     SELECT
         t.* EXCEPT (pfc_primary, pfc_detailed),
         COALESCE(c.primary_category, t.pfc_primary) AS pfc_primary,
@@ -41,11 +41,20 @@ const EFFECTIVE_TRANSACTIONS = `(
     LEFT JOIN gold.transaction_categories AS c USING (transaction_id)
 )`
 
+// True for a transaction that belongs to an event kept separate from the normal totals
+// (count_in_totals = FALSE). Events marked "counted" never affect totals. Expects the
+// transaction aliased as `t`.
+const IN_SEPARATE_EVENT = `EXISTS (
+    SELECT 1 FROM gold.event_transactions AS ev
+    WHERE ev.transaction_id = t.transaction_id AND NOT ev.count_in_totals
+)`
+
 // The full set of rows for gold.spending_adjustments, derived from silver, the ignored
-// list and the tag table:
-//  - remove side: every ignored or tagged transaction is subtracted at its ORIGINAL key
-//  - add side: every tagged, non-ignored transaction is added at (tagged category, no
-//    detailed category), expressed as a negative adjustment
+// list, the tag table and the event view:
+//  - remove side: every ignored, tagged or separate-event transaction is subtracted at
+//    its ORIGINAL key
+//  - add side: every tagged transaction that is neither ignored nor in a separate event
+//    is added at (tagged category, no detailed category), as a negative adjustment
 // The pfc_detailed filter must match dbt/models/gold/gold_spending_by_category.sql
 // exactly (including dropping NULLs), as must the rebuild in prefect/flow.py.
 const ADJUSTMENT_ROWS_SQL = `
@@ -67,6 +76,7 @@ const ADJUSTMENT_ROWS_SQL = `
             AND (
                 EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
                 OR EXISTS (SELECT 1 FROM gold.transaction_categories AS c WHERE c.transaction_id = t.transaction_id)
+                OR ${IN_SEPARATE_EVENT}
             )
 
         UNION ALL
@@ -81,13 +91,14 @@ const ADJUSTMENT_ROWS_SQL = `
         JOIN gold.transaction_categories AS c USING (transaction_id)
         WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
             AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
+            AND NOT ${IN_SEPARATE_EVENT}
     )
     GROUP BY account_id, primary_category, detailed_category, month
 `
 
 // Rebuilds the whole ledger (the tables are tiny). Runs inside the same BigQuery
 // transaction as the ignore/tag write so the two can't drift apart.
-const REBUILD_ADJUSTMENTS = `
+export const REBUILD_ADJUSTMENTS = `
     DELETE FROM gold.spending_adjustments WHERE TRUE;
 
     INSERT INTO gold.spending_adjustments (account_id, primary_category, detailed_category, month, adjustment)
@@ -95,7 +106,7 @@ const REBUILD_ADJUSTMENTS = `
 `
 
 // Logs wall-clock time for a BigQuery job so slow writes can be attributed.
-async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
+export async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
     const start = Date.now();
     try {
         return await fn();
@@ -396,9 +407,13 @@ export async function retrieve_transactions_primary_category_month(primary_categ
                 original_pfc_primary,
                 original_pfc_detailed,
                 is_tagged,
-                i.transaction_id IS NOT NULL AS is_ignored
+                i.transaction_id IS NOT NULL AS is_ignored,
+                ev.event_id,
+                ev.event_name,
+                ev.count_in_totals AS event_counted
             FROM ${EFFECTIVE_TRANSACTIONS} AS t
             LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
+            LEFT JOIN gold.event_transactions AS ev USING (transaction_id)
             WHERE pfc_primary = @primary_category AND DATE_TRUNC(transaction_date, MONTH) = @month_year AND COALESCE(pfc_detailed, '') != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
               ${accountFilter}
         `;
@@ -443,9 +458,13 @@ export async function retrieve_recent_transactions(month_year: string, account_i
                 original_pfc_primary,
                 original_pfc_detailed,
                 is_tagged,
-                i.transaction_id IS NOT NULL AS is_ignored
+                i.transaction_id IS NOT NULL AS is_ignored,
+                ev.event_id,
+                ev.event_name,
+                ev.count_in_totals AS event_counted
             FROM ${EFFECTIVE_TRANSACTIONS} AS t
             LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
+            LEFT JOIN gold.event_transactions AS ev USING (transaction_id)
             WHERE DATE_TRUNC(transaction_date, MONTH) = @month_year
               AND COALESCE(pfc_detailed, '') != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
               ${accountFilter}
@@ -520,9 +539,13 @@ export async function retrieve_transactions_account(account_id: string) {
                 original_pfc_primary,
                 original_pfc_detailed,
                 is_tagged,
-                i.transaction_id IS NOT NULL AS is_ignored
+                i.transaction_id IS NOT NULL AS is_ignored,
+                ev.event_id,
+                ev.event_name,
+                ev.count_in_totals AS event_counted
             FROM ${EFFECTIVE_TRANSACTIONS} AS t
             LEFT JOIN gold.ignored_transactions AS i USING (transaction_id)
+            LEFT JOIN gold.event_transactions AS ev USING (transaction_id)
             WHERE account_id = @account_id
         `;
         
@@ -553,6 +576,7 @@ export async function retrieve_total_spending_month(month_year: string) {
             FROM silver.transactions AS t
             WHERE DATE_TRUNC(transaction_date, MONTH) = @month_year
                 AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
+                AND NOT ${IN_SEPARATE_EVENT}
         `;
 
         const options = {
@@ -811,6 +835,7 @@ export async function retrieve_spending_trends(grain: string, start_date: string
                 AND (@detailed_category = pfc_detailed OR @detailed_category IS NULL)
                 AND pfc_primary NOT IN ('INCOME', 'TRANSFER_IN')
                 AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
+                AND NOT ${IN_SEPARATE_EVENT}
             GROUP BY period
             ORDER BY period
         `;

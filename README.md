@@ -101,7 +101,22 @@ bq mk --table YOUR_PROJECT_ID:gold.spending_adjustments \
 # transaction; the original Plaid category in silver is never modified.
 bq mk --table YOUR_PROJECT_ID:gold.transaction_categories \
   transaction_id:STRING,primary_category:STRING,tagged_at:TIMESTAMP,tagged_by:STRING
+
+# Events (scoped spending windows, e.g. a trip) and manual include/exclude corrections.
+# dbt's gold.event_transactions view reads both, so they must exist before `dbt run`.
+# (account_ids is an ARRAY, which `bq mk` shorthand can't express, hence DDL.)
+bq query --use_legacy_sql=false --project_id=YOUR_PROJECT_ID '
+  CREATE TABLE IF NOT EXISTS gold.events (
+    event_id STRING NOT NULL, name STRING NOT NULL,
+    start_date DATE NOT NULL, end_date DATE,
+    account_ids ARRAY<STRING>, count_in_totals BOOL NOT NULL,
+    created_at TIMESTAMP, created_by STRING, ended_at TIMESTAMP);
+  CREATE TABLE IF NOT EXISTS gold.event_overrides (
+    transaction_id STRING NOT NULL, event_id STRING, mode STRING NOT NULL,
+    updated_at TIMESTAMP, updated_by STRING);'
 ```
+
+The Prefect flow also creates any of these dashboard tables that are missing before it runs dbt (`ensure_tables` in `prefect/flow.py`).
 
 ### 2e. Create a Firestore database
 
@@ -252,7 +267,7 @@ export PROJECT_ID=YOUR_PROJECT_ID
 dbt run --project-dir dbt --profiles-dir dbt/profiles
 ```
 
-This creates the tables `silver.transactions` and `gold.spending_by_category` (the models are named `silver_transactions` and `gold_spending_by_category`, but each sets an `alias` so the table names drop the prefix).
+This creates the tables `silver.transactions` and `gold.spending_by_category` and the view `gold.event_transactions` (the models are named `silver_transactions`, `gold_spending_by_category` and `gold_event_transactions`, but each sets an `alias` so the names drop the prefix). The view needs `gold.events` and `gold.event_overrides` from step 2d.
 
 Run a single model:
 
@@ -456,11 +471,14 @@ The Prefect flow imports `ingestion/main.py` directly (adding `ingestion/` to `s
 | Table | Created by | Columns |
 |---|---|---|
 | `bronze.transactions` | you (step 2d) | `raw_data` STRING (Plaid JSON), `ingested_at` TIMESTAMP. Removed transactions are stored as `{"transaction_id": ..., "removed": true}` |
-| `silver.transactions` | dbt | parsed + deduplicated: `transaction_id`, `account_id`, `amount`, `transaction_date`, `pfc_primary`, `pfc_detailed`, `merchant_name`, `transaction_name`, … |
+| `silver.transactions` | dbt | parsed + deduplicated: `transaction_id`, `account_id`, `amount`, `transaction_date`, `authorized_date` (purchase date, may be NULL), `pfc_primary`, `pfc_detailed`, `merchant_name`, `transaction_name`, … |
 | `gold.spending_by_category` | dbt | `primary_category`, `detailed_category`, `total_spending`, `month`, `account_id` |
 | `gold.budget_limits` | you (step 2d); written by dashboard | `primary_category`, `budget_limit`, `updated_at` |
 | `gold.transaction_categories` | you (step 2d); written by dashboard | `transaction_id`, `primary_category`, `tagged_at`, `tagged_by`. Manual category overrides; applied at read time. |
 | `gold.spending_adjustments` | you (step 2d); rebuilt by dashboard and Prefect | `account_id`, `primary_category`, `detailed_category`, `month`, `adjustment`. Signed amount subtracted from `spending_by_category`: ignored/tagged transactions are subtracted at their original category, tagged ones are added (negative) at the tagged category. |
+| `gold.events` | you (step 2d) or Prefect `ensure_tables`; written by dashboard | `event_id`, `name`, `start_date`, `end_date` (NULL = live), `account_ids` ARRAY (empty = all accounts), `count_in_totals` BOOL, `created_at`, `created_by`, `ended_at`. At most one live event; windows don't overlap. |
+| `gold.event_overrides` | you (step 2d) or Prefect `ensure_tables`; written by dashboard | `transaction_id`, `event_id` (NULL for exclude), `mode` (`include` \| `exclude`), `updated_at`, `updated_by`. One row per transaction; beats the date/account rule. |
+| `gold.event_transactions` | dbt (view) | `transaction_id`, `event_id`, `event_name`, `count_in_totals`, `is_override`. At most one row per transaction: the event it belongs to, by override or by purchase date (`COALESCE(authorized_date, transaction_date)`) within the window and account scope. |
 | `gold.accounts` | ingestion (`sync_accounts`, truncated and reloaded each run) | `account_id`, `name`, `official_name`, `display_name`, `mask`, `type`, `subtype`, `item_id`, `updated_at` |
 
 ### Secret Manager secrets

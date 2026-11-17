@@ -1,13 +1,14 @@
 "use client";
 
 import type { ViewId } from "@/lib/types";
-import { Clock, Grid, ListLines } from "./icons";
+import { Calendar, Clock, Grid, ListLines } from "./icons";
 import { cx } from "./primitives";
 
 const NAV: { id: ViewId; label: string; icon: typeof Grid }[] = [
   { id: "overview", label: "Overview", icon: Grid },
   { id: "categories", label: "Categories", icon: ListLines },
   { id: "budgets", label: "Budgets", icon: Clock },
+  { id: "events", label: "Events", icon: Calendar },
 ];
 
 function NavItems({

@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { monthLabel } from "@/lib/format";
-import { Check, ChevronDown, LogOut, Refresh, RingMark } from "./icons";
+import { Check, ChevronDown, LogOut, Plus, Refresh, RingMark } from "./icons";
 import { cx } from "./primitives";
 
 export interface AccountOption {
@@ -214,6 +214,8 @@ export function PageHeader({
   onAccountChange,
   onRefresh,
   refreshing,
+  showFilters = true,
+  onStartEvent,
 }: {
   title: string;
   months: string[];
@@ -224,6 +226,10 @@ export function PageHeader({
   onAccountChange: (id: string | null) => void;
   onRefresh: () => void;
   refreshing: boolean;
+  // The month and account filters do not apply to the Events view.
+  showFilters?: boolean;
+  // Omitted while an event is already live (only one can run at a time).
+  onStartEvent?: () => void;
 }) {
   return (
     <div className="mb-6 flex flex-wrap items-center justify-between gap-x-3 gap-y-3">
@@ -231,7 +237,9 @@ export function PageHeader({
         <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-subtle">
           {title}
         </span>
-        {months.length > 0 ? (
+        {!showFilters ? (
+          <span className="text-[22px] font-medium tracking-[-0.01em] text-text">{title}</span>
+        ) : months.length > 0 ? (
           <MonthSelect months={months} value={month} onChange={onMonthChange} />
         ) : (
           <span className="text-[22px] font-medium text-text">Overview</span>
@@ -239,7 +247,16 @@ export function PageHeader({
       </div>
 
       <div className="flex min-w-0 items-center gap-2">
-        {accountOptions.length > 0 && (
+        {onStartEvent && (
+          <button
+            onClick={onStartEvent}
+            className="flex h-9 cursor-pointer items-center gap-1.5 rounded-[10px] border border-border px-3 text-[13px] font-medium text-muted transition-colors hover:bg-surface-hover hover:text-text"
+          >
+            <Plus size={14} />
+            Start event
+          </button>
+        )}
+        {showFilters && accountOptions.length > 0 && (
           <AccountSelect
             options={accountOptions}
             value={accountId}
