@@ -10,11 +10,13 @@ import {
   num,
   prettyCategory,
 } from "@/lib/format";
-import type { TransactionRow } from "@/lib/types";
+import type { EventRecord, TransactionRow } from "@/lib/types";
+import { inSeparateEvent } from "@/lib/optimistic";
 import { CategoryIcon, Close, Inbox, Alert } from "./icons";
 import { Button, EmptyState, Skeleton } from "./primitives";
 import { authFetch } from "@/lib/authFetch";
 import { CategoryTagMenu, TaggedBadge } from "./CategoryTagMenu";
+import { EventBadge, EventMoveMenu } from "./EventControls";
 import type { PendingWrites } from "@/lib/optimistic";
 
 export interface DrawerTarget {
@@ -30,6 +32,8 @@ export function TransactionsDrawer({
   pending: pendingWrites,
   onToggleIgnore,
   onTagCategory,
+  events,
+  onMoveToEvent,
 }: {
   target: DrawerTarget | null;
   onClose: () => void;
@@ -37,6 +41,8 @@ export function TransactionsDrawer({
   pending: PendingWrites;
   onToggleIgnore: (t: TransactionRow, ignore: boolean) => Promise<boolean>;
   onTagCategory: (t: TransactionRow, category: string | null) => Promise<boolean>;
+  events: EventRecord[];
+  onMoveToEvent: (t: TransactionRow, eventId: string | null) => Promise<boolean>;
 }) {
   const [result, setResult] = useState<{ key: string; rows: TransactionRow[] } | null>(
     null
@@ -112,6 +118,17 @@ export function TransactionsDrawer({
     if (!ok && snapshot) setResult(snapshot);
   };
 
+  // Event moves change totals server-side, so the version bump refetches the list.
+  const move = async (t: TransactionRow, eventId: string | null) => {
+    setPending((p) => new Set(p).add(t.transaction_id));
+    await onMoveToEvent(t, eventId);
+    setPending((p) => {
+      const next = new Set(p);
+      next.delete(t.transaction_id);
+      return next;
+    });
+  };
+
   const rows = result && result.key === key ? result.rows : null;
   const error = errorKey === key;
 
@@ -133,7 +150,7 @@ export function TransactionsDrawer({
           )
       )
     : null;
-  const counted = rows ? rows.filter((r) => !r.is_ignored) : [];
+  const counted = rows ? rows.filter((r) => !r.is_ignored && !inSeparateEvent(r)) : [];
   const total = counted.reduce((s, r) => s + num(r.amount), 0);
 
   return (
@@ -166,7 +183,7 @@ export function TransactionsDrawer({
           <div className="flex items-baseline justify-between border-b border-border bg-surface-2 px-5 py-3">
             <span className="text-sm text-muted">
               {counted.length} transaction{counted.length === 1 ? "" : "s"}
-              {counted.length !== rows.length && ` · ${rows.length - counted.length} ignored`}
+              {counted.length !== rows.length && ` · ${rows.length - counted.length} not counted`}
             </span>
             <span className="tnum text-sm font-semibold text-text">
               {currencyCents(total)}
@@ -215,10 +232,11 @@ export function TransactionsDrawer({
                     key={t.transaction_id}
                     className="group flex items-center justify-between gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-surface-hover"
                   >
-                    <div className={`min-w-0 flex-1 ${t.is_ignored ? "opacity-50" : ""}`}>
+                    <div className={`min-w-0 flex-1 ${t.is_ignored || inSeparateEvent(t) ? "opacity-50" : ""}`}>
                       <p className="truncate text-sm font-medium text-text">
                         {t.transaction_name || "Unnamed transaction"}
                         {t.is_tagged && <TaggedBadge original={t.original_pfc_primary} />}
+                        {t.event_id && <EventBadge name={t.event_name} counted={t.event_counted} />}
                       </p>
                       <p className="text-xs text-subtle">
                         {dayLabel(dateStr(t.transaction_date))}
@@ -238,6 +256,14 @@ export function TransactionsDrawer({
                       label={`Tag category for ${t.transaction_name || "transaction"}`}
                       onSelect={(c) => tag(t, c)}
                       className="max-w-[72px] text-xs"
+                    />
+                    <EventMoveMenu
+                      events={events}
+                      currentEventId={t.event_id}
+                      disabled={pending.has(t.transaction_id)}
+                      label={`Move ${t.transaction_name || "transaction"} to an event`}
+                      onSelect={(id) => move(t, id)}
+                      className="max-w-[64px] text-xs"
                     />
                     <button
                       type="button"

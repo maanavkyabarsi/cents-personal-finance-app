@@ -19,24 +19,31 @@ export interface SpendDelta {
   amount: number;
 }
 
+// True for a transaction in an event that is kept separate from the monthly totals. The
+// server treats it like an ignored one for totals, so the optimistic math must too.
+export function inSeparateEvent(t: TransactionRow): boolean {
+  return !!t.event_id && t.event_counted === false;
+}
+
 // Effective state of a transaction as the lists report it: a tagged transaction has no
 // detailed category.
 export function currentState(t: TransactionRow): SpendState {
   return {
     category: t.pfc_primary ?? null,
     detailed: t.is_tagged ? null : t.pfc_detailed ?? null,
-    ignored: t.is_ignored,
+    ignored: t.is_ignored || inSeparateEvent(t),
   };
 }
 
 // State after tagging (category) or clearing the tag (null, back to the original category).
 export function taggedState(t: TransactionRow, category: string | null): SpendState {
+  const ignored = t.is_ignored || inSeparateEvent(t);
   return category
-    ? { category, detailed: null, ignored: t.is_ignored }
+    ? { category, detailed: null, ignored }
     : {
         category: t.original_pfc_primary ?? t.pfc_primary ?? null,
         detailed: t.original_pfc_detailed ?? null,
-        ignored: t.is_ignored,
+        ignored,
       };
 }
 

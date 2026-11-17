@@ -1,17 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { num, prettyCategory } from "@/lib/format";
+import { localToday, num, prettyCategory } from "@/lib/format";
 import type {
   Account,
   CategorySummary,
   DashboardOverview,
+  EventInput,
+  EventRecord,
   SpendingRow,
   TransactionRow,
   ViewId,
 } from "@/lib/types";
 import { BottomNav, Sidebar } from "./Sidebar";
 import { PageHeader, TopStrip, type AccountOption } from "./Topbar";
+import { EventBar } from "./EventBar";
+import { StartEventSheet } from "./StartEventSheet";
+import { EventsView, type EventPatch } from "./views/EventsView";
 import { Toast, type ToastState } from "./Toast";
 import { TransactionsDrawer, type DrawerTarget } from "./TransactionsDrawer";
 import { Alert } from "./icons";
@@ -23,6 +28,7 @@ import { authFetch } from "@/lib/authFetch";
 import {
   applySpendDeltas,
   currentState,
+  inSeparateEvent,
   overviewFromSummaries,
   PendingWrites,
   spendDeltas,
@@ -38,6 +44,7 @@ const VIEW_META: Record<ViewId, { title: string }> = {
   overview: { title: "Overview" },
   categories: { title: "Categories" },
   budgets: { title: "Budgets" },
+  events: { title: "Events" },
 };
 
 export function Dashboard() {
@@ -62,6 +69,9 @@ export function Dashboard() {
   const [months, setMonths] = useState<string[]>([]);
   const [summaries, setSummaries] = useState<CategorySummary[]>([]);
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  const [events, setEvents] = useState<EventRecord[] | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [startSheetOpen, setStartSheetOpen] = useState(false);
   // Bumped after an ignore/unignore so totals and transaction lists refetch.
   const [dataVersion, setDataVersion] = useState(0);
   // Mirror of `summaries` so optimistic updates can compute from the latest value
@@ -132,6 +142,17 @@ export function Dashboard() {
     } catch {}
   }, []);
 
+  const loadEvents = useCallback(async () => {
+    try {
+      const res = await authFetch("/api/events");
+      if (!res.ok) throw new Error();
+      const data: EventRecord[] = await res.json();
+      setEvents(Array.isArray(data) ? data : []);
+    } catch {
+      setEvents((e) => e ?? []);
+    }
+  }, []);
+
   useEffect(() => {
     // Fetch-on-mount: every setState in these loaders runs after an await, but
     // the lint rule doesn't track await boundaries and flags the first call.
@@ -141,8 +162,9 @@ export function Dashboard() {
     loadAccounts();
     loadCategoryBudgets();
     loadMonths();
+    loadEvents();
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [load, loadOverall, loadAccounts, loadCategoryBudgets, loadMonths]);
+  }, [load, loadOverall, loadAccounts, loadCategoryBudgets, loadMonths, loadEvents]);
 
   const effectiveMonth = useMemo(() => {
     if (month && months.includes(month)) return month;
@@ -341,7 +363,12 @@ export function Dashboard() {
   const handleToggleIgnore = useCallback(
     async (t: TransactionRow, ignore: boolean) => {
       const transactionId = t.transaction_id;
-      applyOptimistic(t, { ...currentState(t), ignored: ignore }, { is_ignored: ignore });
+      // A row in a separate event stays out of the totals whether or not it is ignored.
+      applyOptimistic(
+        t,
+        { ...currentState(t), ignored: ignore || inSeparateEvent(t) },
+        { is_ignored: ignore }
+      );
       setToast({
         id: Date.now(),
         message: ignore ? "Transaction ignored" : "Transaction restored",
@@ -414,6 +441,159 @@ export function Dashboard() {
     [applyOptimistic, pending]
   );
 
+  // ---- Events -------------------------------------------------------------
+  // Event writes run as one BigQuery transaction on the server, so once the request
+  // returns, every total and list can simply be refetched.
+  const refreshAfterEventWrite = useCallback(() => {
+    void loadEvents();
+    void load(false);
+    setDataVersion((v) => v + 1);
+  }, [loadEvents, load]);
+
+  const eventError = useCallback(async (res: Response, fallback: string) => {
+    const body: { error?: string } | null = await res.json().catch(() => null);
+    return body?.error ?? fallback;
+  }, []);
+
+  const handleCreateEvent = useCallback(
+    async (input: EventInput): Promise<string | null> => {
+      try {
+        const res = await authFetch("/api/events", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        if (!res.ok) return await eventError(res, "Couldn't start the event");
+        setStartSheetOpen(false);
+        refreshAfterEventWrite();
+        setToast({
+          id: Date.now(),
+          message: input.end_date ? `Added ${input.name}` : `Started ${input.name}`,
+          tone: "success",
+        });
+        return null;
+      } catch {
+        return "Couldn't start the event";
+      }
+    },
+    [eventError, refreshAfterEventWrite]
+  );
+
+  const handleUpdateEvent = useCallback(
+    async (id: string, patch: EventPatch) => {
+      try {
+        const res = await authFetch(`/api/events/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          // The server defaults "end" to its own UTC day; send the viewer's local day.
+          body: JSON.stringify(
+            patch.end && patch.end_date === undefined ? { ...patch, end_date: localToday() } : patch
+          ),
+        });
+        if (!res.ok) throw new Error(await eventError(res, "Couldn't update the event"));
+        refreshAfterEventWrite();
+        setToast({
+          id: Date.now(),
+          message: patch.end
+            ? "Event ended"
+            : patch.count_in_totals === undefined
+              ? "Event updated"
+              : patch.count_in_totals
+                ? "Event now counts toward monthly totals"
+                : "Event kept separate from monthly totals",
+          tone: "success",
+        });
+        return true;
+      } catch (e) {
+        setToast({
+          id: Date.now(),
+          message: e instanceof Error ? e.message : "Couldn't update the event",
+          tone: "error",
+        });
+        return false;
+      }
+    },
+    [eventError, refreshAfterEventWrite]
+  );
+
+  const handleDeleteEvent = useCallback(
+    async (id: string) => {
+      try {
+        const res = await authFetch(`/api/events/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!res.ok) throw new Error();
+        refreshAfterEventWrite();
+        setToast({ id: Date.now(), message: "Event deleted", tone: "success" });
+        return true;
+      } catch {
+        setToast({ id: Date.now(), message: "Couldn't delete the event", tone: "error" });
+        return false;
+      }
+    },
+    [refreshAfterEventWrite]
+  );
+
+  // eventId null = take the transaction out of the event it is in.
+  const setEventMembership = useCallback(
+    async (transactionId: string, eventId: string | null) => {
+      try {
+        const res = await authFetch("/api/events/overrides", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            eventId
+              ? { transaction_id: transactionId, mode: "include", event_id: eventId }
+              : { transaction_id: transactionId, mode: "exclude" }
+          ),
+        });
+        if (!res.ok) throw new Error();
+        refreshAfterEventWrite();
+        return true;
+      } catch {
+        setToast({ id: Date.now(), message: "Couldn't update the event", tone: "error" });
+        return false;
+      }
+    },
+    [refreshAfterEventWrite]
+  );
+
+  const handleMoveToEvent = useCallback(
+    async (t: TransactionRow, eventId: string | null) => {
+      const ok = await setEventMembership(t.transaction_id, eventId);
+      if (ok) {
+        const name = events?.find((e) => e.event_id === eventId)?.name;
+        setToast({
+          id: Date.now(),
+          message: eventId ? `Moved to ${name ?? "event"}` : "Removed from event",
+          tone: "success",
+        });
+      }
+      return ok;
+    },
+    [setEventMembership, events]
+  );
+
+  const handleRemoveFromEvent = useCallback(
+    async (transactionId: string) => {
+      const ok = await setEventMembership(transactionId, null);
+      if (ok) setToast({ id: Date.now(), message: "Removed from event", tone: "success" });
+      return ok;
+    },
+    [setEventMembership]
+  );
+
+  const liveEvent = useMemo(() => events?.find((e) => e.live) ?? null, [events]);
+  const eventList = events ?? [];
+
+  const accountLabel = useCallback(
+    (id: string) => accountMap.get(id) ?? `Account …${id.slice(-4)}`,
+    [accountMap]
+  );
+
+  const openEvent = useCallback((id: string) => {
+    setSelectedEventId(id);
+    setView("events");
+  }, []);
+
   const overallSpent = overview?.totalSpent ?? 0;
 
   const openCategory = useCallback(
@@ -439,6 +619,13 @@ export function Dashboard() {
 
         <main className="w-full min-w-0 flex-1 pl-[max(1.25rem,var(--safe-l))] pr-[max(1.25rem,var(--safe-r))] pb-[calc(6rem+var(--safe-b))] pt-7 lg:px-10 lg:pb-12">
           <div className="mx-auto w-full max-w-6xl">
+            {liveEvent && (
+              <EventBar
+                event={liveEvent}
+                onOpen={() => openEvent(liveEvent.event_id)}
+                onEnd={() => handleUpdateEvent(liveEvent.event_id, { end: true })}
+              />
+            )}
             <PageHeader
               title={meta.title}
               months={months}
@@ -447,8 +634,13 @@ export function Dashboard() {
               accountOptions={accountOptions}
               accountId={accountId}
               onAccountChange={setAccountId}
-              onRefresh={() => load(true)}
+              onRefresh={() => {
+                void load(true);
+                void loadEvents();
+              }}
               refreshing={refreshing}
+              showFilters={view !== "events"}
+              onStartEvent={liveEvent ? undefined : () => setStartSheetOpen(true)}
             />
           </div>
           <div key={view} className="animate-fade-up mx-auto w-full max-w-6xl">
@@ -486,12 +678,26 @@ export function Dashboard() {
                 onViewAll={() => setView("categories")}
                 onToggleIgnore={handleToggleIgnore}
                 onTagCategory={handleTagCategory}
+                events={eventList}
+                onMoveToEvent={handleMoveToEvent}
               />
             ) : view === "categories" ? (
               <CategoriesView
                 month={effectiveMonth}
                 summaries={summaries}
                 onOpenCategory={openCategory}
+              />
+            ) : view === "events" ? (
+              <EventsView
+                events={events}
+                selectedId={selectedEventId}
+                onSelect={setSelectedEventId}
+                version={dataVersion}
+                accountLabel={accountLabel}
+                onStart={() => setStartSheetOpen(true)}
+                onUpdate={handleUpdateEvent}
+                onDelete={handleDeleteEvent}
+                onRemoveTransaction={handleRemoveFromEvent}
               />
             ) : (
               <BudgetsView
@@ -517,7 +723,16 @@ export function Dashboard() {
         pending={pending}
         onToggleIgnore={handleToggleIgnore}
         onTagCategory={handleTagCategory}
+        events={eventList}
+        onMoveToEvent={handleMoveToEvent}
       />
+      {startSheetOpen && (
+        <StartEventSheet
+          accountOptions={accountOptions}
+          onClose={() => setStartSheetOpen(false)}
+          onCreate={handleCreateEvent}
+        />
+      )}
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );

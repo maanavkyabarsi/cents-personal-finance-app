@@ -174,6 +174,12 @@ export const ChevronDown = (p: IconProps) => (
     <path d="m6 9 6 6 6-6" />
   </svg>
 );
+export const Calendar = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="4" y="5" width="16" height="15" rx="2.5" />
+    <path d="M4 10h16M9 3v4M15 3v4" />
+  </svg>
+);
 export const Plus = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M12 5v14M5 12h14" />

@@ -84,6 +84,28 @@ export function dayLabel(iso: string | null): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+// Today in the browser's timezone as YYYY-MM-DD (toISOString would give the UTC day).
+export function localToday(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+function fullDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+// "Nov 3 – Nov 10, 2026", or "Nov 3, 2026 – now" for a live event.
+export function eventRangeLabel(start: string, end: string | null): string {
+  if (!end) return `${fullDate(start)} – now`;
+  if (start === end) return fullDate(start);
+  const sameYear = start.slice(0, 4) === end.slice(0, 4);
+  return `${sameYear ? dayLabel(start) : fullDate(start)} – ${fullDate(end)}`;
+}
+
 export function prettyCategory(raw: string | null): string {
   if (!raw) return "Uncategorized";
   return raw

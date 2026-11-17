@@ -25,6 +25,11 @@ export interface TransactionRow {
   original_pfc_primary?: string | null;
   original_pfc_detailed?: string | null;
   is_tagged?: boolean;
+  // Set when the transaction belongs to an event. event_counted = the event also counts
+  // toward monthly totals; false means it is kept separate (not in the totals).
+  event_id?: string | null;
+  event_name?: string | null;
+  event_counted?: boolean | null;
 }
 
 export interface CategorySummary {
@@ -64,4 +69,35 @@ export interface Account {
   subtype: string | null;
 }
 
-export type ViewId = "overview" | "categories" | "budgets";
+export type ViewId = "overview" | "categories" | "budgets" | "events";
+
+export interface EventInput {
+  name: string;
+  start_date: string;
+  end_date: string | null;
+  account_ids: string[];
+  count_in_totals: boolean;
+}
+
+export interface EventRecord {
+  event_id: string;
+  name: string;
+  start_date: string;
+  end_date: string | null;
+  account_ids: string[];
+  count_in_totals: boolean;
+  live: boolean;
+  transaction_count: number;
+  total: number;
+}
+
+export interface EventTransaction extends TransactionRow {
+  is_override: boolean;
+}
+
+export interface EventDetail {
+  event: EventRecord;
+  categories: { category: string; spent: number }[];
+  daily: { date: string; spent: number }[];
+  transactions: EventTransaction[];
+}

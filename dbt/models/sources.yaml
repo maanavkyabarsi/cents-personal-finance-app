@@ -6,3 +6,12 @@ sources:
     schema: bronze
     tables:
       - name: transactions
+
+  # Written by the dashboard; created by hand (README step 2d) or by the Prefect flow's
+  # ensure_tables task, which runs before dbt.
+  - name: gold
+    database: "{{ env_var('PROJECT_ID') }}"
+    schema: gold
+    tables:
+      - name: events
+      - name: event_overrides
