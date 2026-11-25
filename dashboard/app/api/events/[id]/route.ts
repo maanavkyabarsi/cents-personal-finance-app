@@ -39,7 +39,12 @@ export async function PATCH(request: NextRequest, { params }: Context) {
     }
 
     try {
-        const current = await get_event_row(id)
+        // The event row and the account list are independent, so fetch them together.
+        const wantsAccounts = Array.isArray(payload.account_ids) && payload.account_ids.length > 0
+        const [current, accounts] = await Promise.all([
+            get_event_row(id),
+            wantsAccounts ? retrieve_accounts() : null,
+        ])
         if (!current) {
             return NextResponse.json({ error: 'Event not found' }, { status: 404 })
         }
@@ -85,7 +90,7 @@ export async function PATCH(request: NextRequest, { params }: Context) {
                 return NextResponse.json({ error: 'account_ids must be an array of account ids' }, { status: 400 })
             }
             if (account_ids.length > 0) {
-                const known = new Set((await retrieve_accounts()).map((a) => a.account_id))
+                const known = new Set((accounts ?? await retrieve_accounts()).map((a) => a.account_id))
                 const unknown = account_ids.filter((a) => !known.has(a))
                 if (unknown.length > 0) {
                     return NextResponse.json({ error: 'Unknown account_ids', unknown }, { status: 400 })
@@ -100,7 +105,7 @@ export async function PATCH(request: NextRequest, { params }: Context) {
             fields.count_in_totals = payload.count_in_totals
         }
 
-        const { found, clash } = await update_event(id, fields)
+        const { found, clash } = await update_event(id, current, fields)
         if (!found) {
             return NextResponse.json({ error: 'Event not found' }, { status: 404 })
         }

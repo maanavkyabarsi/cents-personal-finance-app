@@ -1,7 +1,7 @@
 import { isSpendingCategory } from "./categories";
 import { budgetStatus } from "./derive";
 import { dateStr, num } from "./format";
-import type { CategorySummary, DashboardOverview, TransactionRow } from "./types";
+import type { CategorySummary, DashboardOverview, EventRecord, TransactionRow } from "./types";
 
 // Client-side mirror of how a single transaction feeds the category summaries, used to
 // update totals immediately while the write is still running. The server refetch that
@@ -224,4 +224,110 @@ export class PendingWrites {
       .flatMap((w) => spendDeltas(w.original, w.after));
     return deltas.length ? applySpendDeltas(summaries, budgets, deltas) : summaries;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Pending event writes
+//
+// Same idea as PendingWrites, for the events list: a create/update/delete is shown at once
+// and layered back over any events fetch that started before the write landed.
+
+interface PendingEventWrite {
+  record: EventRecord | null; // null = the event was deleted
+  doneAt: number | null; // null while the request is queued or in flight
+}
+
+export class PendingEventWrites {
+  private entries = new Map<string, PendingEventWrite>();
+
+  begin(eventId: string, record: EventRecord | null) {
+    this.entries.set(eventId, { record, doneAt: null });
+  }
+
+  finish(eventId: string) {
+    const e = this.entries.get(eventId);
+    if (e) e.doneAt = Date.now();
+  }
+
+  fail(eventId: string) {
+    this.entries.delete(eventId);
+  }
+
+  overlay(events: EventRecord[], startedAt: number): EventRecord[] {
+    const now = Date.now();
+    const byId = new Map(events.map((e) => [e.event_id, e]));
+    let changed = false;
+    for (const [id, e] of this.entries) {
+      if (e.doneAt !== null && now - e.doneAt > KEEP_MS) {
+        this.entries.delete(id);
+      } else if (e.doneAt === null || e.doneAt >= startedAt) {
+        changed = true;
+        if (e.record) {
+          // Keep the fetched count/total: only the editable fields are ours.
+          const fetched = byId.get(id);
+          byId.set(id, fetched ? { ...fetched, ...pickEditable(e.record) } : e.record);
+        } else {
+          byId.delete(id);
+        }
+      }
+    }
+    if (!changed) return events;
+    return sortEvents([...byId.values()]);
+  }
+}
+
+function pickEditable(e: EventRecord) {
+  return {
+    name: e.name,
+    start_date: e.start_date,
+    end_date: e.end_date,
+    account_ids: e.account_ids,
+    count_in_totals: e.count_in_totals,
+    live: e.live,
+  };
+}
+
+// Same order as the server: newest start first.
+export function sortEvents(events: EventRecord[]): EventRecord[] {
+  return [...events].sort(
+    (a, b) => b.start_date.localeCompare(a.start_date) || a.event_id.localeCompare(b.event_id)
+  );
+}
+
+// Does the window overlap another event's? (An open end runs forever, as on the server.)
+export function overlappingEvent(
+  events: EventRecord[],
+  window: { start_date: string; end_date: string | null },
+  ignoreId?: string
+): EventRecord | null {
+  const FAR = "9999-12-31";
+  return (
+    events.find(
+      (e) =>
+        e.event_id !== ignoreId &&
+        e.start_date <= (window.end_date ?? FAR) &&
+        (e.end_date ?? FAR) >= window.start_date
+    ) ?? null
+  );
+}
+
+// For each transaction of an event, its state before and after the event's count_in_totals
+// flips (counted = also in the monthly totals). Feed the result to PendingWrites.begin and
+// spendDeltas, exactly like a tag or ignore.
+export function eventTotalsDeltas(
+  event: { event_id: string; name: string },
+  transactions: TransactionRow[],
+  wasCounted: boolean,
+  nowCounted: boolean
+) {
+  const tag = { event_id: event.event_id, event_name: event.name };
+  return transactions.map((t) => {
+    const before: TransactionRow = { ...t, ...tag, event_counted: wasCounted };
+    const patched: TransactionRow = { ...t, ...tag, event_counted: nowCounted };
+    const after: SpendState = {
+      ...currentState(before),
+      ignored: t.is_ignored || !nowCounted,
+    };
+    return { original: before, patched, after };
+  });
 }

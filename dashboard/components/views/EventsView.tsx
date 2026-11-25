@@ -34,6 +34,7 @@ export function EventsView({
   onUpdate,
   onDelete,
   onRemoveTransaction,
+  onDetailLoaded,
 }: {
   events: EventRecord[] | null;
   selectedId: string | null;
@@ -44,12 +45,15 @@ export function EventsView({
   onUpdate: (id: string, patch: EventPatch) => Promise<boolean>;
   onDelete: (id: string) => Promise<boolean>;
   onRemoveTransaction: (transactionId: string) => Promise<boolean>;
+  onDetailLoaded: (detail: EventDetail) => void;
 }) {
   if (selectedId) {
     return (
       <EventDetailView
         id={selectedId}
         version={version}
+        live={events?.find((e) => e.event_id === selectedId) ?? null}
+        onDetailLoaded={onDetailLoaded}
         accountLabel={accountLabel}
         onBack={() => onSelect(null)}
         onUpdate={onUpdate}
@@ -129,6 +133,8 @@ export function EventsView({
 function EventDetailView({
   id,
   version,
+  live,
+  onDetailLoaded,
   accountLabel,
   onBack,
   onUpdate,
@@ -137,6 +143,10 @@ function EventDetailView({
 }: {
   id: string;
   version: number;
+  // The event as the list shows it, which includes edits still being saved. Its name,
+  // dates, accounts and totals mode win over the fetched detail's.
+  live: EventRecord | null;
+  onDetailLoaded: (detail: EventDetail) => void;
   accountLabel: (id: string) => string;
   onBack: () => void;
   onUpdate: (id: string, patch: EventPatch) => Promise<boolean>;
@@ -151,12 +161,16 @@ function EventDetailView({
     let cancelled = false;
     authFetch(`/api/events/${encodeURIComponent(id)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((data: EventDetail) => !cancelled && setResult({ id, data }))
+      .then((data: EventDetail) => {
+        if (cancelled) return;
+        onDetailLoaded(data);
+        setResult({ id, data });
+      })
       .catch(() => !cancelled && setResult({ id, data: null }));
     return () => {
       cancelled = true;
     };
-  }, [id, version]);
+  }, [id, version, onDetailLoaded]);
 
   const loaded = result && result.id === id;
   const detail = loaded ? result.data : null;
@@ -214,7 +228,18 @@ function EventDetailView({
     );
   }
 
-  const { event, categories, daily, transactions } = detail;
+  const { categories, daily, transactions } = detail;
+  const event: EventRecord = live
+    ? {
+        ...detail.event,
+        name: live.name,
+        start_date: live.start_date,
+        end_date: live.end_date,
+        account_ids: live.account_ids,
+        count_in_totals: live.count_in_totals,
+        live: live.live,
+      }
+    : detail.event;
   const maxDaily = Math.max(...daily.map((d) => d.spent), 1);
   const maxCat = Math.max(...categories.map((c) => c.spent), 1);
   const sorted = [...transactions].sort((a, b) =>

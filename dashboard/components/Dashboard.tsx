@@ -6,6 +6,7 @@ import type {
   Account,
   CategorySummary,
   DashboardOverview,
+  EventDetail,
   EventInput,
   EventRecord,
   SpendingRow,
@@ -28,12 +29,17 @@ import { authFetch } from "@/lib/authFetch";
 import {
   applySpendDeltas,
   currentState,
+  eventTotalsDeltas,
   inSeparateEvent,
+  overlappingEvent,
   overviewFromSummaries,
+  PendingEventWrites,
   PendingWrites,
+  sortEvents,
   spendDeltas,
   taggedState,
   transactionMonth,
+  type SpendDelta,
   type SpendState,
 } from "@/lib/optimistic";
 import { useTheme } from "@/lib/useTheme";
@@ -79,6 +85,13 @@ export function Dashboard() {
   const summariesRef = useRef<CategorySummary[]>([]);
   // Writes that may not be visible to fetches yet; layered over fetched data.
   const [pending] = useState(() => new PendingWrites());
+  // Same for the events list, plus a mirror of it, the event details the Events view has
+  // loaded (used to move an event's spend in or out of the totals), and the queue that
+  // runs event writes one at a time.
+  const [pendingEvents] = useState(() => new PendingEventWrites());
+  const eventsRef = useRef<EventRecord[] | null>(null);
+  const eventDetails = useRef(new Map<string, EventDetail>());
+  const eventQueue = useRef<Promise<unknown>>(Promise.resolve());
 
   const load = useCallback(async (showSpinner: boolean) => {
     if (showSpinner) setRefreshing(true);
@@ -142,16 +155,22 @@ export function Dashboard() {
     } catch {}
   }, []);
 
+  const commitEvents = useCallback((next: EventRecord[] | null) => {
+    eventsRef.current = next;
+    setEvents(next);
+  }, []);
+
   const loadEvents = useCallback(async () => {
+    const startedAt = Date.now();
     try {
       const res = await authFetch("/api/events");
       if (!res.ok) throw new Error();
       const data: EventRecord[] = await res.json();
-      setEvents(Array.isArray(data) ? data : []);
+      commitEvents(pendingEvents.overlay(Array.isArray(data) ? data : [], startedAt));
     } catch {
-      setEvents((e) => e ?? []);
+      commitEvents(eventsRef.current ?? []);
     }
-  }, []);
+  }, [commitEvents, pendingEvents]);
 
   useEffect(() => {
     // Fetch-on-mount: every setState in these loaders runs after an await, but
@@ -442,118 +461,281 @@ export function Dashboard() {
   );
 
   // ---- Events -------------------------------------------------------------
-  // Event writes run as one BigQuery transaction on the server, so once the request
-  // returns, every total and list can simply be refetched.
-  const refreshAfterEventWrite = useCallback(() => {
-    void loadEvents();
-    void load(false);
-    setDataVersion((v) => v + 1);
-  }, [loadEvents, load]);
+  // Like tags and ignores, event writes show up at once and the request runs in the
+  // background. They go through a queue so edits made in quick succession reach BigQuery
+  // one at a time (its transactions on the same tables would otherwise conflict). Each
+  // write runs as one BigQuery transaction, so once it returns everything can be refetched;
+  // totals are only refetched when the write could have changed them.
+  const refreshAfterEventWrite = useCallback(
+    (affectsTotals: boolean) => {
+      void loadEvents();
+      if (affectsTotals) {
+        void load(false);
+        setDataVersion((v) => v + 1);
+      }
+    },
+    [loadEvents, load]
+  );
+
+  const enqueueEventWrite = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+    const run = eventQueue.current.then(fn);
+    eventQueue.current = run.catch(() => undefined);
+    return run;
+  }, []);
+
+  // Moves an event's spend in or out of the visible totals when it flips between "kept
+  // separate" and "also counted". Needs the event's transactions, so it only applies once
+  // the Events view has loaded them; otherwise the refetch after the write corrects the
+  // totals. Returns the transaction ids registered in `pending`.
+  const applyEventTotals = useCallback(
+    (event: EventRecord, nowCounted: boolean): string[] => {
+      const detail = eventDetails.current.get(event.event_id);
+      if (!detail || event.count_in_totals === nowCounted) return [];
+      const moves = eventTotalsDeltas(event, detail.transactions, event.count_in_totals, nowCounted);
+      if (moves.length === 0) return [];
+      const deltas: SpendDelta[] = [];
+      for (const m of moves) {
+        // The rows don't carry an account, so with an account filter on we leave the
+        // totals to the refetch rather than guess.
+        pending.begin(m.original, m.patched, m.after, null);
+        if (accountId === null && effectiveMonth && transactionMonth(m.original) === effectiveMonth.slice(0, 7)) {
+          deltas.push(...spendDeltas(m.original, m.after));
+        }
+      }
+      const ids = new Set(moves.map((m) => m.original.transaction_id));
+      setRecent((prev) =>
+        prev && {
+          ...prev,
+          rows: prev.rows.map((r) => (r.event_id === event.event_id ? { ...r, event_counted: nowCounted } : r)),
+        }
+      );
+      if (deltas.length > 0) {
+        const next = applySpendDeltas(summariesRef.current, budgets, deltas);
+        summariesRef.current = next;
+        setSummaries(next);
+        setOverview((o) => (o ? overviewFromSummaries(o, next) : o));
+      }
+      return [...ids];
+    },
+    [pending, accountId, effectiveMonth, budgets]
+  );
 
   const eventError = useCallback(async (res: Response, fallback: string) => {
     const body: { error?: string } | null = await res.json().catch(() => null);
     return body?.error ?? fallback;
   }, []);
 
+  // Puts `record` back (or drops it, when null) after a failed background write, then
+  // refetches so the list shows what the server actually has.
+  const rollbackEvent = useCallback(
+    (id: string, record: EventRecord | null, txnIds: string[]) => {
+      pendingEvents.fail(id);
+      for (const t of txnIds) pending.fail(t);
+      const rest = (eventsRef.current ?? []).filter((e) => e.event_id !== id);
+      commitEvents(record ? sortEvents([...rest, record]) : rest);
+      setDataVersion((v) => v + 1); // undo any optimistic totals
+      void loadEvents();
+    },
+    [pendingEvents, pending, commitEvents, loadEvents]
+  );
+
   const handleCreateEvent = useCallback(
     async (input: EventInput): Promise<string | null> => {
-      try {
+      const clash = overlappingEvent(eventsRef.current ?? [], input);
+      if (clash) return `Overlaps with the event "${clash.name}"`;
+
+      const id = crypto.randomUUID();
+      const record: EventRecord = {
+        event_id: id,
+        ...input,
+        live: input.end_date === null,
+        transaction_count: 0,
+        total: 0,
+      };
+      pendingEvents.begin(id, record);
+      commitEvents(sortEvents([...(eventsRef.current ?? []), record]));
+      setStartSheetOpen(false);
+      setToast({
+        id: Date.now(),
+        message: input.end_date ? `Added ${input.name}` : `Started ${input.name}`,
+        tone: "success",
+      });
+
+      enqueueEventWrite(async () => {
         const res = await authFetch("/api/events", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input),
+          body: JSON.stringify({ ...input, event_id: id }),
         });
-        if (!res.ok) return await eventError(res, "Couldn't start the event");
-        setStartSheetOpen(false);
-        refreshAfterEventWrite();
-        setToast({
-          id: Date.now(),
-          message: input.end_date ? `Added ${input.name}` : `Started ${input.name}`,
-          tone: "success",
-        });
-        return null;
-      } catch {
-        return "Couldn't start the event";
-      }
+        if (!res.ok) throw new Error(await eventError(res, "Couldn't start the event"));
+      }).then(
+        () => {
+          pendingEvents.finish(id);
+          // A kept-separate event pulls its purchases out of the totals.
+          refreshAfterEventWrite(!input.count_in_totals);
+        },
+        (e) => {
+          rollbackEvent(id, null, []);
+          setToast({
+            id: Date.now(),
+            message: e instanceof Error ? e.message : "Couldn't start the event",
+            tone: "error",
+          });
+        }
+      );
+      return null;
     },
-    [eventError, refreshAfterEventWrite]
+    [pendingEvents, commitEvents, enqueueEventWrite, eventError, refreshAfterEventWrite, rollbackEvent]
   );
 
   const handleUpdateEvent = useCallback(
     async (id: string, patch: EventPatch) => {
-      try {
+      const current = eventsRef.current?.find((e) => e.event_id === id);
+      if (!current) {
+        setToast({ id: Date.now(), message: "Couldn't update the event", tone: "error" });
+        return false;
+      }
+      // The server defaults "end" to its own UTC day; send the viewer's local day.
+      const body = patch.end && patch.end_date === undefined ? { ...patch, end_date: localToday() } : patch;
+      const end_date = patch.end
+        ? (body.end_date ?? localToday())
+        : patch.end_date !== undefined
+          ? patch.end_date
+          : current.end_date;
+      const next: EventRecord = {
+        ...current,
+        name: patch.name ?? current.name,
+        count_in_totals: patch.count_in_totals ?? current.count_in_totals,
+        account_ids: patch.account_ids ?? current.account_ids,
+        end_date,
+        live: end_date === null,
+      };
+
+      let problem: string | null = null;
+      if (next.end_date !== null && next.end_date < next.start_date) {
+        problem = "The end date is before the start date";
+      } else {
+        const clash = overlappingEvent(eventsRef.current ?? [], next, id);
+        if (clash) problem = `Overlaps with the event "${clash.name}"`;
+      }
+      if (problem) {
+        setToast({ id: Date.now(), message: problem, tone: "error" });
+        return false;
+      }
+
+      const affectsTotals =
+        next.count_in_totals !== current.count_in_totals ||
+        next.end_date !== current.end_date ||
+        next.account_ids.join() !== current.account_ids.join();
+
+      pendingEvents.begin(id, next);
+      commitEvents(sortEvents((eventsRef.current ?? []).map((e) => (e.event_id === id ? next : e))));
+      const txnIds = applyEventTotals(current, next.count_in_totals);
+      setToast({
+        id: Date.now(),
+        message: patch.end
+          ? "Event ended"
+          : patch.count_in_totals === undefined
+            ? "Event updated"
+            : patch.count_in_totals
+              ? "Event now counts toward monthly totals"
+              : "Event kept separate from monthly totals",
+        tone: "success",
+      });
+
+      enqueueEventWrite(async () => {
         const res = await authFetch(`/api/events/${encodeURIComponent(id)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          // The server defaults "end" to its own UTC day; send the viewer's local day.
-          body: JSON.stringify(
-            patch.end && patch.end_date === undefined ? { ...patch, end_date: localToday() } : patch
-          ),
+          body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error(await eventError(res, "Couldn't update the event"));
-        refreshAfterEventWrite();
-        setToast({
-          id: Date.now(),
-          message: patch.end
-            ? "Event ended"
-            : patch.count_in_totals === undefined
-              ? "Event updated"
-              : patch.count_in_totals
-                ? "Event now counts toward monthly totals"
-                : "Event kept separate from monthly totals",
-          tone: "success",
-        });
-        return true;
-      } catch (e) {
-        setToast({
-          id: Date.now(),
-          message: e instanceof Error ? e.message : "Couldn't update the event",
-          tone: "error",
-        });
-        return false;
-      }
+      }).then(
+        () => {
+          pendingEvents.finish(id);
+          for (const t of txnIds) pending.finish(t);
+          refreshAfterEventWrite(affectsTotals);
+        },
+        (e) => {
+          rollbackEvent(id, current, txnIds);
+          setToast({
+            id: Date.now(),
+            message: e instanceof Error ? e.message : "Couldn't update the event",
+            tone: "error",
+          });
+        }
+      );
+      return true;
     },
-    [eventError, refreshAfterEventWrite]
+    [
+      pendingEvents,
+      pending,
+      commitEvents,
+      applyEventTotals,
+      enqueueEventWrite,
+      eventError,
+      refreshAfterEventWrite,
+      rollbackEvent,
+    ]
   );
 
   const handleDeleteEvent = useCallback(
     async (id: string) => {
-      try {
-        const res = await authFetch(`/api/events/${encodeURIComponent(id)}`, { method: "DELETE" });
-        if (!res.ok) throw new Error();
-        refreshAfterEventWrite();
-        setToast({ id: Date.now(), message: "Event deleted", tone: "success" });
-        return true;
-      } catch {
+      const current = eventsRef.current?.find((e) => e.event_id === id);
+      if (!current) {
         setToast({ id: Date.now(), message: "Couldn't delete the event", tone: "error" });
         return false;
       }
+      pendingEvents.begin(id, null);
+      commitEvents((eventsRef.current ?? []).filter((e) => e.event_id !== id));
+      // Its purchases go back into the normal totals.
+      const txnIds = applyEventTotals(current, true);
+      setToast({ id: Date.now(), message: "Event deleted", tone: "success" });
+
+      enqueueEventWrite(async () => {
+        const res = await authFetch(`/api/events/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!res.ok) throw new Error();
+      }).then(
+        () => {
+          pendingEvents.finish(id);
+          for (const t of txnIds) pending.finish(t);
+          eventDetails.current.delete(id);
+          refreshAfterEventWrite(!current.count_in_totals);
+        },
+        () => {
+          rollbackEvent(id, current, txnIds);
+          setToast({ id: Date.now(), message: "Couldn't delete the event", tone: "error" });
+        }
+      );
+      return true;
     },
-    [refreshAfterEventWrite]
+    [pendingEvents, pending, commitEvents, applyEventTotals, enqueueEventWrite, refreshAfterEventWrite, rollbackEvent]
   );
 
   // eventId null = take the transaction out of the event it is in.
   const setEventMembership = useCallback(
     async (transactionId: string, eventId: string | null) => {
       try {
-        const res = await authFetch("/api/events/overrides", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            eventId
-              ? { transaction_id: transactionId, mode: "include", event_id: eventId }
-              : { transaction_id: transactionId, mode: "exclude" }
-          ),
+        await enqueueEventWrite(async () => {
+          const res = await authFetch("/api/events/overrides", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              eventId
+                ? { transaction_id: transactionId, mode: "include", event_id: eventId }
+                : { transaction_id: transactionId, mode: "exclude" }
+            ),
+          });
+          if (!res.ok) throw new Error();
         });
-        if (!res.ok) throw new Error();
-        refreshAfterEventWrite();
+        refreshAfterEventWrite(true);
         return true;
       } catch {
         setToast({ id: Date.now(), message: "Couldn't update the event", tone: "error" });
         return false;
       }
     },
-    [refreshAfterEventWrite]
+    [enqueueEventWrite, refreshAfterEventWrite]
   );
 
   const handleMoveToEvent = useCallback(
@@ -580,6 +762,11 @@ export function Dashboard() {
     },
     [setEventMembership]
   );
+
+  // Stable identity: the Events view refetches its detail whenever this changes.
+  const handleEventDetailLoaded = useCallback((d: EventDetail) => {
+    eventDetails.current.set(d.event.event_id, d);
+  }, []);
 
   const liveEvent = useMemo(() => events?.find((e) => e.live) ?? null, [events]);
   const eventList = events ?? [];
@@ -698,6 +885,7 @@ export function Dashboard() {
                 onUpdate={handleUpdateEvent}
                 onDelete={handleDeleteEvent}
                 onRemoveTransaction={handleRemoveFromEvent}
+                onDetailLoaded={handleEventDetailLoaded}
               />
             ) : (
               <BudgetsView

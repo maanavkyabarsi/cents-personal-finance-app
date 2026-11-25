@@ -56,16 +56,19 @@ function toEventRow(row: Record<string, unknown>): EventRow {
 
 export async function get_event_row(event_id: string): Promise<EventRow | null> {
     try {
-        const [job] = await bigquery.createQueryJob({
-            query: `
-                SELECT event_id, name, start_date, end_date, account_ids, count_in_totals
-                FROM gold.events
-                WHERE event_id = @event_id
-            `,
-            location: 'US',
-            params: { event_id },
+        const rows = await timed('get_event_row', async () => {
+            const [job] = await bigquery.createQueryJob({
+                query: `
+                    SELECT event_id, name, start_date, end_date, account_ids, count_in_totals
+                    FROM gold.events
+                    WHERE event_id = @event_id
+                `,
+                location: 'US',
+                params: { event_id },
+            })
+            const [r] = await job.getQueryResults()
+            return r
         })
-        const [rows] = await job.getQueryResults()
         return rows[0] ? toEventRow(rows[0]) : null
     }
     catch (error: unknown) {
@@ -83,10 +86,14 @@ export async function create_event(input: {
     end_date: string | null
     account_ids: string[]
     count_in_totals: boolean
+    event_id?: string
     uid: string | null
 }): Promise<{ created: true, event_id: string } | { created: false, clash: string }> {
     try {
-        const event_id = crypto.randomUUID()
+        const event_id = input.event_id ?? crypto.randomUUID()
+        // An event that also counts toward the totals never moves anything out of them, so
+        // the adjustment ledger is untouched and doesn't need rebuilding.
+        const rebuild = !input.count_in_totals
         const row = await run_event_script(`
             DECLARE clash_name STRING;
             SET clash_name = (
@@ -95,13 +102,12 @@ export async function create_event(input: {
                     AND COALESCE(end_date, ${FAR_FUTURE}) >= @start_date
             );
 
-            BEGIN TRANSACTION;
+            ${rebuild ? 'BEGIN TRANSACTION;' : ''}
             INSERT INTO gold.events (event_id, name, start_date, end_date, account_ids, count_in_totals, created_at, created_by, ended_at)
             SELECT @event_id, @name, @start_date, @end_date, @account_ids, @count_in_totals,
                 CURRENT_TIMESTAMP(), @uid, IF(@end_date IS NULL, CAST(NULL AS TIMESTAMP), CURRENT_TIMESTAMP())
             FROM (SELECT 1) WHERE clash_name IS NULL;
-            ${REBUILD_ADJUSTMENTS}
-            COMMIT TRANSACTION;
+            ${rebuild ? `${REBUILD_ADJUSTMENTS} COMMIT TRANSACTION;` : ''}
 
             SELECT clash_name AS clash;
         `, {
@@ -137,9 +143,16 @@ export async function create_event(input: {
 }
 
 // Replaces an event's editable fields (the caller merges a patch onto the current row).
-// Same overlap rule as create_event, ignoring the event itself.
-export async function update_event(event_id: string, next: Omit<EventRow, 'event_id'>) {
+// Same overlap rule as create_event, ignoring the event itself. The ledger is rebuilt only
+// when the change can move transactions in or out of the totals (dates, accounts or the
+// totals mode); a rename is a single UPDATE.
+export async function update_event(event_id: string, current: EventRow, next: Omit<EventRow, 'event_id'>) {
     try {
+        const rebuild = next.start_date !== current.start_date
+            || next.end_date !== current.end_date
+            || next.count_in_totals !== current.count_in_totals
+            || next.account_ids.length !== current.account_ids.length
+            || next.account_ids.some((id, i) => id !== current.account_ids[i])
         const row = await run_event_script(`
             DECLARE found BOOL DEFAULT (SELECT COUNT(*) > 0 FROM gold.events WHERE event_id = @event_id);
             DECLARE clash_name STRING;
@@ -150,7 +163,7 @@ export async function update_event(event_id: string, next: Omit<EventRow, 'event
                     AND COALESCE(end_date, ${FAR_FUTURE}) >= @start_date
             );
 
-            BEGIN TRANSACTION;
+            ${rebuild ? 'BEGIN TRANSACTION;' : ''}
             UPDATE gold.events
             SET name = @name,
                 start_date = @start_date,
@@ -159,8 +172,7 @@ export async function update_event(event_id: string, next: Omit<EventRow, 'event
                 count_in_totals = @count_in_totals,
                 ended_at = IF(@end_date IS NULL, CAST(NULL AS TIMESTAMP), COALESCE(ended_at, CURRENT_TIMESTAMP()))
             WHERE event_id = @event_id AND clash_name IS NULL;
-            ${REBUILD_ADJUSTMENTS}
-            COMMIT TRANSACTION;
+            ${rebuild ? `${REBUILD_ADJUSTMENTS} COMMIT TRANSACTION;` : ''}
 
             SELECT found AS found, clash_name AS clash;
         `, {

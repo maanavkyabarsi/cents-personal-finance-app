@@ -57,7 +57,38 @@ const IN_SEPARATE_EVENT = `EXISTS (
 //    is added at (tagged category, no detailed category), as a negative adjustment
 // The pfc_detailed filter must match dbt/models/gold/gold_spending_by_category.sql
 // exactly (including dropping NULLs), as must the rebuild in prefect/flow.py.
+// Scans silver once and flags each transaction (ignored / tagged / in a separate event)
+// with joins against de-duplicated key sets, instead of re-running correlated EXISTS
+// lookups (each of which re-evaluated the event view) per transaction and per side.
 const ADJUSTMENT_ROWS_SQL = `
+    WITH ignored AS (
+        SELECT DISTINCT transaction_id FROM gold.ignored_transactions
+    ),
+    tagged AS (
+        SELECT transaction_id, ANY_VALUE(primary_category) AS primary_category
+        FROM gold.transaction_categories
+        GROUP BY transaction_id
+    ),
+    separate_event AS (
+        SELECT DISTINCT transaction_id FROM gold.event_transactions WHERE NOT count_in_totals
+    ),
+    flagged AS (
+        SELECT
+            t.account_id,
+            t.pfc_primary,
+            t.pfc_detailed,
+            t.amount,
+            DATE_TRUNC(t.transaction_date, MONTH) AS month,
+            i.transaction_id IS NOT NULL AS is_ignored,
+            c.transaction_id IS NOT NULL AS is_tagged,
+            c.primary_category AS tag_category,
+            s.transaction_id IS NOT NULL AS is_separate
+        FROM silver.transactions AS t
+        LEFT JOIN ignored AS i ON i.transaction_id = t.transaction_id
+        LEFT JOIN tagged AS c ON c.transaction_id = t.transaction_id
+        LEFT JOIN separate_event AS s ON s.transaction_id = t.transaction_id
+        WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+    )
     SELECT
         account_id,
         primary_category,
@@ -66,32 +97,24 @@ const ADJUSTMENT_ROWS_SQL = `
         ROUND(SUM(adjustment), 2) AS adjustment
     FROM (
         SELECT
-            t.account_id,
-            t.pfc_primary AS primary_category,
-            t.pfc_detailed AS detailed_category,
-            DATE_TRUNC(t.transaction_date, MONTH) AS month,
-            t.amount AS adjustment
-        FROM silver.transactions AS t
-        WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
-            AND (
-                EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
-                OR EXISTS (SELECT 1 FROM gold.transaction_categories AS c WHERE c.transaction_id = t.transaction_id)
-                OR ${IN_SEPARATE_EVENT}
-            )
+            account_id,
+            pfc_primary AS primary_category,
+            pfc_detailed AS detailed_category,
+            month,
+            amount AS adjustment
+        FROM flagged
+        WHERE is_ignored OR is_tagged OR is_separate
 
         UNION ALL
 
         SELECT
-            t.account_id,
-            c.primary_category,
+            account_id,
+            tag_category AS primary_category,
             CAST(NULL AS STRING) AS detailed_category,
-            DATE_TRUNC(t.transaction_date, MONTH) AS month,
-            -t.amount AS adjustment
-        FROM silver.transactions AS t
-        JOIN gold.transaction_categories AS c USING (transaction_id)
-        WHERE t.pfc_detailed != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
-            AND NOT EXISTS (SELECT 1 FROM gold.ignored_transactions AS i WHERE i.transaction_id = t.transaction_id)
-            AND NOT ${IN_SEPARATE_EVENT}
+            month,
+            -amount AS adjustment
+        FROM flagged
+        WHERE is_tagged AND NOT is_ignored AND NOT is_separate
     )
     GROUP BY account_id, primary_category, detailed_category, month
 `
@@ -264,7 +287,26 @@ export async function set_transaction_category(transaction_id: string, primary_c
     }
 }
 
+// Accounts change rarely and are read on every event write (to validate account_ids), so
+// keep the result briefly and share one in-flight query between concurrent callers.
+const ACCOUNTS_TTL_MS = 60_000
+let accountsCache: { at: number, rows: Awaited<ReturnType<typeof fetch_accounts>> } | null = null
+let accountsInFlight: ReturnType<typeof fetch_accounts> | null = null
+
 export async function retrieve_accounts() {
+    if (accountsCache && Date.now() - accountsCache.at < ACCOUNTS_TTL_MS) return accountsCache.rows
+    accountsInFlight ??= fetch_accounts()
+        .then((rows) => {
+            accountsCache = { at: Date.now(), rows }
+            return rows
+        })
+        .finally(() => {
+            accountsInFlight = null
+        })
+    return accountsInFlight
+}
+
+async function fetch_accounts() {
     try {
         const query = `
             SELECT account_id, display_name, mask, type, subtype
@@ -277,11 +319,13 @@ export async function retrieve_accounts() {
             location: 'US',
         };
 
-        const [job] = await bigquery.createQueryJob(options);
-        console.log(`Job ${job.id} started.`);
+        return await timed('retrieve_accounts', async () => {
+            const [job] = await bigquery.createQueryJob(options);
+            console.log(`Job ${job.id} started.`);
 
-        const [rows] = await job.getQueryResults();
-        return rows
+            const [rows] = await job.getQueryResults();
+            return rows
+        })
     }
 
     catch (error: unknown) {

@@ -57,6 +57,12 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'count_in_totals must be true or false' }, { status: 400 })
     }
 
+    // The dashboard shows a new event before this request returns, so it picks the id.
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (payload.event_id !== undefined && (typeof payload.event_id !== 'string' || !UUID.test(payload.event_id))) {
+        return NextResponse.json({ error: 'event_id must be a UUID' }, { status: 400 })
+    }
+
     try {
         if (account_ids.length > 0) {
             const known = new Set((await retrieve_accounts()).map((a) => a.account_id))
@@ -72,6 +78,7 @@ export async function POST(request: NextRequest) {
             end_date,
             account_ids,
             count_in_totals: payload.count_in_totals,
+            event_id: payload.event_id as string | undefined,
             uid: request.headers.get('x-user-id'),
         })
         if (!result.created) {
